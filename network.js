@@ -29,7 +29,8 @@ const CONFIG = {
 // networkEffects.ripples: {node, time, color, type}, networkEffects.blinks: {node, time}
 export const networkEffects = {
     ripples: [],
-    blinks: []
+    blinks: [],
+    processingFlashes: [] // Added for node processing flash
 };
 
 /**
@@ -380,7 +381,7 @@ export class Network {
             }
         }
         
-        // Remove inactive packets (except those with active removal effects)
+        // Remove inactive packets (except those with active effects)
         this._cleanupPackets();
     }
 
@@ -431,6 +432,10 @@ export class Network {
         packet.source = atNode;
         packet.target = next;
         packet.progress = 0;
+
+        // Add processing flash effect to the node that rerouted the packet
+        effects.processingFlashes.push({ node: atNode, time: 0 });
+        console.log('[network.js] Processing flash added for node:', atNode.id, 'at time:', performance.now());
     }
 
     /**

@@ -33,7 +33,13 @@ const VISUAL = {
     BLINK_WIDTH: 8,
     BLINK_SHADOW_BLUR: 15,
     BLINK_ALPHA: 0.7,
-    BLINK_DURATION_FACTOR: 4
+    BLINK_DURATION_FACTOR: 4,
+
+    // Processing Flash
+    PROCESSING_FLASH_COLOR: 'rgba(255, 255, 150, 0.7)', 
+    PROCESSING_FLASH_DURATION: 0.3, 
+    PROCESSING_FLASH_MAX_RADIUS_FACTOR: 1.3, 
+    PROCESSING_FLASH_SHADOW_BLUR: 7 
 };
 
 /**
@@ -49,6 +55,7 @@ export function renderNetwork(ctx, network, now) {
     // Draw all elements in correct order (back to front)
     drawRipples(ctx);
     drawBlinks(ctx);
+    drawProcessingFlashes(ctx);
     drawEdges(ctx, network.edges);
     drawPackets(ctx, network.packets);
     drawNodes(ctx, network.nodes, now);
@@ -133,6 +140,48 @@ function drawBlinks(ctx) {
         ctx.shadowColor = VISUAL.BLINK_COLOR;
         ctx.shadowBlur = VISUAL.BLINK_SHADOW_BLUR;
         ctx.stroke();
+        ctx.restore();
+    }
+}
+
+/**
+ * Draw processing flash effects on nodes
+ * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
+ */
+function drawProcessingFlashes(ctx) {
+    if (networkEffects.processingFlashes.length > 0) {
+        console.log('[renderer.js] drawProcessingFlashes called. Flashes to draw:', networkEffects.processingFlashes.length);
+    }
+    for (const flash of networkEffects.processingFlashes) {
+        const { node, time } = flash;
+        const progress = time / VISUAL.PROCESSING_FLASH_DURATION;
+
+        console.log(`[renderer.js] Drawing flash for node ${node.id}: progress=${progress.toFixed(3)}, time=${time.toFixed(3)}`);
+
+        if (progress >= 1 || progress < 0) {
+            console.log(`[renderer.js] Flash for node ${node.id} skipped (progress out of bounds): ${progress.toFixed(3)}`);
+            continue;
+        }
+
+        const baseRadius = VISUAL.NODE_RADIUS;
+        const flashRadius = baseRadius * (1 + progress * (VISUAL.PROCESSING_FLASH_MAX_RADIUS_FACTOR - 1));
+        const alpha = VISUAL.PACKET_ALPHA * (1 - progress);
+
+        if (alpha <= 0) {
+            console.log(`[renderer.js] Flash for node ${node.id} skipped (alpha too low): ${alpha.toFixed(3)}`);
+            continue;
+        }
+        
+        console.log(`[renderer.js] Node ${node.id} flash: radius=${flashRadius.toFixed(2)}, alpha=${alpha.toFixed(2)}`);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, flashRadius, 0, 2 * Math.PI);
+        ctx.fillStyle = VISUAL.PROCESSING_FLASH_COLOR;
+        ctx.globalAlpha = alpha;
+        ctx.shadowColor = VISUAL.PROCESSING_FLASH_COLOR;
+        ctx.shadowBlur = VISUAL.PROCESSING_FLASH_SHADOW_BLUR;
+        ctx.fill();
         ctx.restore();
     }
 }

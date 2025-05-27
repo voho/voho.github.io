@@ -41,8 +41,24 @@ function setup() {
     function advanceEffects(dt) {
         networkEffects.ripples.forEach(r => r.time += dt);
         networkEffects.blinks.forEach(b => b.time += dt);
-        networkEffects.ripples = networkEffects.ripples.filter(r => r.time < 0.7);
-        networkEffects.blinks = networkEffects.blinks.filter(b => b.time < 0.5);
+        
+        if (networkEffects.processingFlashes.length > 0) {
+            console.log('[script.js] Advancing processingFlashes. Count:', networkEffects.processingFlashes.length);
+        }
+        networkEffects.processingFlashes.forEach(pf => {
+            pf.time += dt;
+            // console.log('[script.js] Flash node', pf.node.id, 'time:', pf.time.toFixed(3)); // Can be too verbose
+        });
+
+        networkEffects.ripples = networkEffects.ripples.filter(r => r.time < 0.7); // Corresponds to RIPPLE_DURATION
+        networkEffects.blinks = networkEffects.blinks.filter(b => b.time < 0.5); // Corresponds to BLINK_DURATION
+        // Duration for processing flash will be defined in renderer.js (e.g., 0.3s)
+        // For now, using a hardcoded value, ensure it matches renderer.js VISUAL.PROCESSING_FLASH_DURATION
+        const initialFlashCount = networkEffects.processingFlashes.length;
+        networkEffects.processingFlashes = networkEffects.processingFlashes.filter(pf => pf.time < 0.3);
+        if (initialFlashCount > 0 && networkEffects.processingFlashes.length < initialFlashCount) {
+            console.log('[script.js] Filtered processingFlashes. Remaining:', networkEffects.processingFlashes.length);
+        }
     }
     function animate(now) {
         // Request next frame immediately to avoid delays
