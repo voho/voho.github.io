@@ -4,14 +4,13 @@ import { renderNetwork } from './renderer.js';
 
 // Configuration
 const CONFIG = {
-    TARGET_TPS: 50,           // Target ticks per second
-    FRAME_TIME: 1000 / 50,    // Target time per frame in ms
+    TARGET_TPS: 50,           // Target ticks per second (less relevant for rendering now)
+    FRAME_TIME: 1000 / 50,    // Target time per frame in ms (less relevant for rendering now)
     PACKET_EMIT_CHANCE: 0.06  // Chance to emit a packet each frame
 };
 
 let networkInstance;
 let animationFrame;
-let lastFrameTime = 0;       // Time of the last processed frame
 
 function setup() {
     console.log('[Script] setup called');
@@ -49,18 +48,9 @@ function setup() {
         // Request next frame immediately to avoid delays
         animationFrame = requestAnimationFrame(animate);
         
-        // Calculate time since last frame
-        const elapsed = now - lastFrameTime;
-        
-        // Skip frame if not enough time has passed (throttle to TARGET_TPS)
-        if (elapsed < CONFIG.FRAME_TIME) {
-            return;
-        }
-        
         // Calculate delta time, capped to avoid large jumps
         const dt = Math.min((now - lastTime) / 1000, 0.1);
         lastTime = now;
-        lastFrameTime = now;
         
         // Randomly emit packets
         if (Math.random() < CONFIG.PACKET_EMIT_CHANCE) {
@@ -73,7 +63,7 @@ function setup() {
         networkInstance.updatePackets(dt, networkEffects);
         
         // Render frame
-        renderNetwork(ctx, networkInstance);
+        renderNetwork(ctx, networkInstance, now);
     }
     animate(lastTime);
 

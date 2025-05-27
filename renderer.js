@@ -41,8 +41,9 @@ const VISUAL = {
  * Main rendering function for the network
  * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
  * @param {Object} network - Network object containing nodes, edges, and packets
+ * @param {number} now - Current timestamp from performance.now() for animations
  */
-export function renderNetwork(ctx, network) {
+export function renderNetwork(ctx, network, now) {
     // Clear canvas
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
@@ -51,7 +52,7 @@ export function renderNetwork(ctx, network) {
     drawBlinks(ctx);
     drawEdges(ctx, network.edges);
     drawPackets(ctx, network.packets);
-    drawNodes(ctx, network.nodes);
+    drawNodes(ctx, network.nodes, now);
 }
 
 /**
@@ -163,16 +164,43 @@ function drawEdges(ctx, edges) {
  * @param {Array} packets - Array of packet objects
  */
 function drawPackets(ctx, packets) {
+    const easeOutQuad = t => t * (2 - t);
+
     for (const packet of packets) {
-        // Interpolate position based on progress
-        const x = packet.source.x + (packet.target.x - packet.source.x) * packet.progress;
-        const y = packet.source.y + (packet.target.y - packet.source.y) * packet.progress;
+        const easedProgress = easeOutQuad(packet.progress);
+
+        // Interpolate position based on eased progress
+        const currentX = packet.source.x + (packet.target.x - packet.source.x) * easedProgress;
+        const currentY = packet.source.y + (packet.target.y - packet.source.y) * easedProgress;
         
         ctx.save();
+
+        // Draw trails (simple version: 2 trailing circles)
+        const trailCount = 2;
+        const trailSpacingFactor = 0.05; // How far back the trail elements are, relative to progress
+        const trailAlphaFactor = 0.5; // How much dimmer trail elements are
+
+        for (let i = trailCount; i > 0; i--) {
+            const trailProgress = Math.max(0, easedProgress - i * trailSpacingFactor);
+            if (trailProgress === easedProgress) continue; // Don't draw on top of main packet if progress is too low
+
+            const trailX = packet.source.x + (packet.target.x - packet.source.x) * trailProgress;
+            const trailY = packet.source.y + (packet.target.y - packet.source.y) * trailProgress;
+            
+            ctx.globalAlpha = VISUAL.PACKET_ALPHA * Math.pow(trailAlphaFactor, i);
+            ctx.filter = `blur(${VISUAL.PACKET_BLUR})`;
+            ctx.beginPath();
+            ctx.arc(trailX, trailY, VISUAL.PACKET_RADIUS * (1 - 0.2 * i), 0, 2 * Math.PI); // Slightly smaller trails
+            ctx.fillStyle = packet.color;
+            // No shadow for trails to keep it subtle and performant
+            ctx.fill();
+        }
+
+        // Draw main packet
         ctx.globalAlpha = VISUAL.PACKET_ALPHA;
         ctx.filter = `blur(${VISUAL.PACKET_BLUR})`;
         ctx.beginPath();
-        ctx.arc(x, y, VISUAL.PACKET_RADIUS, 0, 2 * Math.PI);
+        ctx.arc(currentX, currentY, VISUAL.PACKET_RADIUS, 0, 2 * Math.PI);
         ctx.fillStyle = packet.color;
         ctx.shadowColor = packet.color;
         ctx.shadowBlur = VISUAL.PACKET_SHADOW_BLUR;
@@ -185,13 +213,20 @@ function drawPackets(ctx, packets) {
  * Draw all nodes in the network
  * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
  * @param {Array} nodes - Array of node objects
+ * @param {number} now - Current timestamp for animations
  */
-function drawNodes(ctx, nodes) {
+export function drawNodes(ctx, nodes, now) {
     for (const node of nodes) {
         ctx.save();
         ctx.globalAlpha = VISUAL.NODE_ALPHA;
+
+        // Breathing effect
+        const breathCycle = (now / 2000) * Math.PI * 2; // Adjust 2000 for speed
+        const breathAmount = Math.sin(breathCycle + node.id) * 2; // node.id for phase offset, 2 for pixel amplitude
+        const currentRadius = VISUAL.NODE_RADIUS + breathAmount;
+
         ctx.beginPath();
-        ctx.arc(node.x, node.y, VISUAL.NODE_RADIUS, 0, 2 * Math.PI);
+        ctx.arc(node.x, node.y, currentRadius, 0, 2 * Math.PI);
         ctx.fillStyle = node.color;
         ctx.shadowColor = node.color;
         ctx.shadowBlur = VISUAL.NODE_SHADOW_BLUR;

@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;700&display=swap');
+
 /* Main styles for Vojta Hordějčuk's website */
 * {
     margin: 0;
@@ -6,7 +8,7 @@
 }
 
 body {
-    font-family: 'Arial', sans-serif;
+    font-family: 'Fira Sans', sans-serif;
     background-color: #000;
     color: #fff;
     height: 100vh;
@@ -42,6 +44,7 @@ body {
 }
 
 h1 {
+    font-family: 'Fira Sans', sans-serif;
     font-size: 3rem;
     margin-bottom: 2rem;
 }
@@ -55,7 +58,7 @@ h1 {
 .button {
     display: inline-block;
     padding: 12px 24px;
-    background-color: transparent;
+    background-color: rgba(0, 0, 0, 0.9);
     color: #fff;
     text-decoration: none;
     border: 2px solid #fff;
