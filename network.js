@@ -33,6 +33,8 @@ export class Node {
         this.isSelected = false;
         this.lastEmitTime = 0;
         this.lastPulseTime = 0; // For visual effects
+        this.gridR = null; // Grid row
+        this.gridC = null; // Grid column
     }
 }
 
@@ -135,6 +137,8 @@ export class Network {
                 y = Math.max(margin, Math.min(this.canvasHeight - margin, y));
 
                 const node = new Node(nodeIdCounter++, x, y);
+                node.gridR = r; // Store grid row
+                node.gridC = c; // Store grid column
                 this.nodes.push(node);
             }
             if (nodeIdCounter >= numNodes) break;
@@ -254,6 +258,73 @@ export class Network {
         });
 
         // Node repulsion logic is removed as per request.
+    }
+
+    /**
+     * Updates the network's dimensions and recalculates node positions.
+     * @param {number} newCanvasWidth - The new width of the canvas.
+     * @param {number} newCanvasHeight - The new height of the canvas.
+     */
+    updateDimensions(newCanvasWidth, newCanvasHeight) {
+        this.canvasWidth = newCanvasWidth;
+        this.canvasHeight = newCanvasHeight;
+
+        const numNodes = this.nodes.length; // Use actual number of existing nodes
+        if (numNodes === 0) return; // Should not happen if called after construction
+
+        const aspectRatio = this.canvasWidth / this.canvasHeight;
+        let cols = Math.ceil(Math.sqrt(numNodes * aspectRatio));
+        let rows = Math.ceil(numNodes / cols);
+
+        while (cols * rows > numNodes * 1.5 && cols > 1 && rows > 1) {
+            if ((cols - 1) * rows >= numNodes) cols--;
+            else if (cols * (rows - 1) >= numNodes) rows--;
+            else break;
+        }
+        
+        // Ensure cols and rows can accommodate all nodes if numNodes is fixed
+        // This logic might need refinement if numNodes can change, but for fixed NUM_NODES from config, it should be fine.
+        // The original _createLatticeNodes logic for cols/rows is good here.
+
+        const cellWidth = this.canvasWidth / cols;
+        const cellHeight = this.canvasHeight / rows;
+        const margin = config.NODE_RADIUS * 2 + 5;
+
+        this.nodes.forEach(node => {
+            // Use stored gridR and gridC
+            let baseX = (node.gridC + 0.5) * cellWidth;
+            let baseY = (node.gridR + 0.5) * cellHeight;
+
+            // Reapply consistent noise if desired, or recalculate for new scale
+            // For simplicity, let's re-calculate noise based on new cell size. 
+            // If we wanted *identical* relative jitter, we'd need to store noise factors or initial offsets.
+            const noiseX = (Math.random() - 0.5) * cellWidth * config.LATTICE_NOISE_FACTOR;
+            const noiseY = (Math.random() - 0.5) * cellHeight * config.LATTICE_NOISE_FACTOR;
+
+            let newX = baseX + noiseX;
+            let newY = baseY + noiseY;
+
+            newX = Math.max(margin, Math.min(this.canvasWidth - margin, newX));
+            newY = Math.max(margin, Math.min(this.canvasHeight - margin, newY));
+
+            // Update node's current and target positions
+            // For smooth transition, update targetX/Y and let updateNodePositions handle movement.
+            // For immediate jump, set x/y directly.
+            // Let's do immediate jump for resize, simpler.
+            node.x = newX;
+            node.y = newY;
+            node.originalX = newX; // Also update originalX/Y to prevent immediate drift
+            node.originalY = newY;
+        });
+
+        // Edges don't need explicit update as they are drawn between node x/y coordinates.
+        // Packets will continue on their current edges; their relative progress should remain valid.
+        // If edges were re-calculated (e.g. _createClosestNeighborEdges), packets might need re-evaluation.
+        // For now, keeping existing edges is fine.
+
+        if (config.DEBUG_MODE) {
+            console.log(`[network.js] Network dimensions updated. Width: ${this.canvasWidth}, Height: ${this.canvasHeight}`);
+        }
     }
 
     /**

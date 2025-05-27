@@ -23,17 +23,27 @@ function setup() {
         const width = window.innerWidth;
         const height = window.innerHeight;
 
+        // Update dimensions for both canvases
         canvas1.width = width;
         canvas1.height = height;
-        networkInstance = new Network(width, height);
-
         canvas2.width = width;
         canvas2.height = height;
-        networkInstance2 = new Network(width, height); 
-        // We can use different config for the second network if needed by passing a modified config object to its constructor
-        // For now, it will use the same global 'config'
+
+        if (networkInstance) {
+            networkInstance.updateDimensions(width, height);
+        } else {
+            networkInstance = new Network(width, height);
+        }
+
+        if (networkInstance2) {
+            networkInstance2.updateDimensions(width, height);
+        } else {
+            networkInstance2 = new Network(width, height);
+            // We can use different config for the second network if needed
+            // For now, it will use the same global 'config'
+        }
     }
-    resizeCanvas(); // Initial call to set size and create networks
+    resizeCanvas(); // Initial call to set size and create/update networks
     window.addEventListener('resize', resizeCanvas);
 
     // Animation loop
