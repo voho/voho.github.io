@@ -1,83 +1,38 @@
 // network.js
 // Handles network data model: nodes, edges, packets
+import { config } from './config.js'; // Added import for new config
 
-// Configuration Constants
-const CONFIG = {
-    // Node placement
-    NODE_MIN_DIST: 60,    // Minimum distance between nodes
-    NODE_MARGIN: 30,      // Margin from canvas edges
-    NODE_MAX_TRIES: 100,  // Max attempts to place a node
-    NODE_MAX_CONN: 4,     // Maximum connections per node
-    
-    // Packet behavior
-    MAX_HOPS: 3,          // Maximum redirects before removal
-    PACKET_SPEED: 0.5,    // Movement speed (progress units per second)
-    
-    // Animation durations
-    RIPPLE_DURATION: 0.7, // How long ripples last (seconds)
-    BLINK_DURATION: 0.5,  // How long blinks last (seconds)
-    
-    // Node movement
-    NODE_MAX_SPEED: 0.5,         // Maximum node speed
-    NODE_ACCELERATION: 0.05,     // How quickly nodes change direction
-    NODE_DAMPING: 0.98,          // Friction to prevent excessive speed
-    NODE_DRIFT_RADIUS: 30,       // Maximum distance from original position
-    NODE_RETURN_FORCE: 0.01      // Force pulling nodes back to original position
-};
-
-// Effect queues for renderer
-// networkEffects.ripples: {node, time, color, type}, networkEffects.blinks: {node, time}
-export const networkEffects = {
-    ripples: [],
-    blinks: [],
-    processingFlashes: [] // Added for node processing flash
-};
-
-/**
- * Determines if two line segments (ab and cd) cross each other
- * @param {Node} a - First point of first segment
- * @param {Node} b - Second point of first segment
- * @param {Node} c - First point of second segment
- * @param {Node} d - Second point of second segment
- * @returns {boolean} - True if the segments cross
- */
-function edgesCross(a, b, c, d) {
-    // Helper: Determine if three points make a counter-clockwise turn
-    function ccw(p1, p2, p3) {
-        return (p3.y - p1.y) * (p2.x - p1.x) > (p2.y - p1.y) * (p3.x - p1.x);
-    }
-    
-    // Segments cross if they share no endpoints and straddle each other
-    return (
-        a !== c && a !== d && b !== c && b !== d &&
-        ccw(a, c, d) !== ccw(b, c, d) &&
-        ccw(a, b, c) !== ccw(a, b, d)
-    );
+// Helper function for random integer in a range
+function randomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// Helper function to shuffle an array
+function shuffleArray(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+}
 
 /**
  * Represents a node in the network
  */
 export class Node {
-    /**
-     * Create a new node
-     * @param {number} id - Unique identifier
-     * @param {number} x - X coordinate
-     * @param {number} y - Y coordinate
-     * @param {string} color - CSS color string
-     */
-    constructor(id, x, y, color) {
+    constructor(id, x, y, color = config.NODE_COLOR) {
         this.id = id;
         this.x = x;
         this.y = y;
-        this.originalX = x;     // Store original position for drift constraints
-        this.originalY = y;     // Store original position for drift constraints
-        this.vx = 0;            // X velocity component
-        this.vy = 0;            // Y velocity component
+        this.originalX = x; // Store original position for any potential return logic
+        this.originalY = y;
+        this.vx = 0; // Velocity x
+        this.vy = 0; // Velocity y
         this.color = color;
-        this.connections = [];
-        this.lastEmitTime = -Infinity; // Track when this node last emitted a packet
+        this.connections = []; // Stores Edge objects
+        this.isSelected = false;
+        this.lastEmitTime = 0;
+        this.lastPulseTime = 0; // For visual effects
     }
 }
 
@@ -85,12 +40,8 @@ export class Node {
  * Represents a connection between two nodes
  */
 export class Edge {
-    /**
-     * Create a new edge
-     * @param {Node} source - Source node
-     * @param {Node} target - Target node
-     */
     constructor(source, target) {
+        this.id = `edge-${source.id}-${target.id}`;
         this.source = source;
         this.target = target;
     }
@@ -100,23 +51,18 @@ export class Edge {
  * Represents a packet traveling through the network
  */
 export class Packet {
-    /**
-     * Create a new packet
-     * @param {Node} source - Starting node
-     * @param {Node} target - Next node to visit
-     * @param {string} color - CSS color string
-     */
-    constructor(source, target, color) {
-        this.source = source;         // Current source node
-        this.target = target;         // Current target node
-        this.progress = 0;            // Progress from 0 (start) to 1 (arrived)
-        this.color = color;           // Visual color
-        this.active = true;           // Whether packet is still active
-        this.hops = 0;                // Number of redirects so far
-        this.prevNode = null;         // Previous node (to avoid backtracking)
-        this.removed = false;         // Whether packet was removed due to hop limit
-        this.removalEffect = null;    // Visual effect for removal {type, node, time}
-        this.finalTargetId = null;    // ID of the ultimate destination node
+    constructor(sourceNode, targetNode, finalTargetId, color = 'white', hops = 0) {
+        this.id = `packet-${sourceNode.id}-${targetNode.id}-${Date.now()}`;
+        this.sourceNode = sourceNode;
+        this.targetNode = targetNode;
+        this.finalTargetId = finalTargetId;
+        this.x = sourceNode.x;
+        this.y = sourceNode.y;
+        this.progress = 0; // 0 to 1 for movement along the edge
+        this.color = color;
+        this.active = true;
+        this.hops = hops;
+        this.path = [sourceNode.id]; // Track nodes visited
     }
 }
 
@@ -126,190 +72,118 @@ export class Packet {
 export class Network {
     /**
      * Create a new network
-     * @param {number} width - Canvas width
-     * @param {number} height - Canvas height
-     * @param {number} nodeCount - Number of nodes to create
+     * @param {number} canvasWidth - Canvas width
+     * @param {number} canvasHeight - Canvas height
      */
-    constructor(width, height, nodeCount = 10) {
-        this.width = width;
-        this.height = height;
-        this.nodeCount = nodeCount;
+    constructor(canvasWidth, canvasHeight) {
         this.nodes = [];
         this.edges = [];
         this.packets = [];
-        this.initialize();
-    }
+        this.canvasWidth = canvasWidth;
+        this.canvasHeight = canvasHeight;
+        this.effects = {
+            nodePulses: [],
+            processingFlashes: [],
+            blinks: [] // Will be populated by the main update loop that manages this network instance
+        };
 
-    /**
-     * Initialize the network with nodes and edges
-     */
-    initialize() {
-        this.nodes = [];
-        this.edges = [];
-        this.packets = [];
-        
-        this._placeNodes();
-        this._normalizeNodePositions();
-        this._createEdges();
-    }
-    
-    /**
-     * Resize the network to fit a new canvas size without regenerating the structure
-     * @param {number} width - New canvas width
-     * @param {number} height - New canvas height
-     */
-    resizeCanvas(width, height) {
-        // Update dimensions
-        this.width = width;
-        this.height = height;
-        
-        // Only adjust node positions, keeping the same network structure
-        if (this.nodes.length > 0) {
-            // Reset velocities to prevent erratic movement after resize
-            for (const node of this.nodes) {
-                node.vx = 0;
-                node.vy = 0;
-            }
-            
-            // Rescale all nodes to fill the entire canvas and update original positions
-            this._normalizeNodePositions(true);
+        this._createLatticeNodes();
+        this._createClosestNeighborEdges();
+
+        if (config.DEBUG_MODE) {
+            console.log(`[network.js] Network created with ${this.nodes.length} nodes and ${this.edges.length} edges.`);
         }
     }
 
     /**
-     * Place nodes with minimum distance constraints
+     * Create lattice nodes
      * @private
      */
-    _placeNodes() {
-        for (let i = 0; i < this.nodeCount; i++) {
-            let x, y, tries = 0, ok = false;
-            
-            // Try to find a position that's not too close to other nodes
-            while (!ok && tries < CONFIG.NODE_MAX_TRIES) {
-                x = Math.random() * this.width;
-                y = Math.random() * this.height;
-                ok = true;
-                
-                for (const other of this.nodes) {
-                    const dx = x - other.x;
-                    const dy = y - other.y;
-                    if (Math.sqrt(dx*dx + dy*dy) < CONFIG.NODE_MIN_DIST) {
-                        ok = false;
-                        break;
-                    }
-                }
-                tries++;
+    _createLatticeNodes() {
+        const numNodes = config.NUM_NODES;
+        const aspectRatio = this.canvasWidth / this.canvasHeight;
+        let cols = Math.ceil(Math.sqrt(numNodes * aspectRatio));
+        let rows = Math.ceil(numNodes / cols);
+
+        // Adjust cols/rows to be closer to NUM_NODES if the calculation overshoots significantly
+        while (cols * rows > numNodes * 1.5 && cols > 1 && rows > 1) {
+            if ((cols-1)*rows >= numNodes) cols--;
+            else if (cols*(rows-1) >= numNodes) rows--;
+            else break;
+        }
+
+        const cellWidth = this.canvasWidth / cols;
+        const cellHeight = this.canvasHeight / rows;
+        const margin = config.NODE_RADIUS * 2 + 5; // Ensure nodes aren't on the very edge
+
+        let nodeIdCounter = 0;
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                if (nodeIdCounter >= numNodes) break;
+
+                let baseX = (c + 0.5) * cellWidth;
+                let baseY = (r + 0.5) * cellHeight;
+
+                const noiseX = (Math.random() - 0.5) * cellWidth * config.LATTICE_NOISE_FACTOR;
+                const noiseY = (Math.random() - 0.5) * cellHeight * config.LATTICE_NOISE_FACTOR;
+
+                let x = baseX + noiseX;
+                let y = baseY + noiseY;
+
+                // Clamp positions to be within canvas bounds (with margin)
+                x = Math.max(margin, Math.min(this.canvasWidth - margin, x));
+                y = Math.max(margin, Math.min(this.canvasHeight - margin, y));
+
+                const node = new Node(nodeIdCounter++, x, y);
+                this.nodes.push(node);
             }
-            
-            // Create the node with a random color
-            const node = new Node(i, x, y, `hsl(${Math.random()*360},80%,60%)`);
-            this.nodes.push(node);
+            if (nodeIdCounter >= numNodes) break;
         }
     }
 
     /**
-     * Normalize node positions to fit within margins
+     * Create edges by connecting nodes to their closest neighbors.
      * @private
-     * @param {boolean} [updateOriginalPositions=true] - Whether to update original positions
      */
-    _normalizeNodePositions(updateOriginalPositions = true) {
-        if (this.nodes.length === 0) return;
-        
-        // Find the bounds of all nodes
-        let minX = Math.min(...this.nodes.map(n => n.x));
-        let maxX = Math.max(...this.nodes.map(n => n.x));
-        let minY = Math.min(...this.nodes.map(n => n.y));
-        let maxY = Math.max(...this.nodes.map(n => n.y));
-        
-        const spanX = maxX - minX || 1; // Avoid division by zero
-        const spanY = maxY - minY || 1;
-        
-        // Scale and translate all nodes to fit within margins
-        // Don't preserve aspect ratio - stretch to fill the entire canvas
-        for (const node of this.nodes) {
-            // Calculate new position scaled to fill the entire canvas
-            const newX = CONFIG.NODE_MARGIN + ((node.x - minX) / spanX) * (this.width - 2 * CONFIG.NODE_MARGIN);
-            const newY = CONFIG.NODE_MARGIN + ((node.y - minY) / spanY) * (this.height - 2 * CONFIG.NODE_MARGIN);
-            
-            // Update current position
-            node.x = newX;
-            node.y = newY;
-            
-            // Update original position if requested (for resize operations)
-            if (updateOriginalPositions) {
-                node.originalX = newX;
-                node.originalY = newY;
-            }
-        }
-    }
+    _createClosestNeighborEdges() {
+        if (this.nodes.length < 2) return;
 
-    /**
-     * Create edges between nodes
-     * @private
-     */
-    _createEdges() {
-        for (const node of this.nodes) {
-            // Sort neighbors by distance
-            const neighbors = this.nodes.filter(n => n !== node)
-                .sort((a, b) => this._getDistanceSquared(node, a) - this._getDistanceSquared(node, b));
+        const _distance = (node1, node2) => {
+            const dx = node1.x - node2.x;
+            const dy = node1.y - node2.y;
+            return Math.sqrt(dx * dx + dy * dy);
+        };
+
+        this.nodes.forEach(sourceNode => {
+            const numEdgesToCreate = randomInt(config.EDGES_PER_NODE_MIN, config.EDGES_PER_NODE_MAX);
+            let actualEdgesCreated = 0;
+
+            const potentialTargetsWithDistances = this.nodes
+                .filter(n => n.id !== sourceNode.id)
+                .map(targetNode => ({
+                    node: targetNode,
+                    distance: _distance(sourceNode, targetNode)
+                }))
+                .sort((a, b) => a.distance - b.distance);
             
-            // Randomly choose how many connections this node should have (1-4)
-            const maxConns = 1 + Math.floor(Math.random() * CONFIG.NODE_MAX_CONN);
-            let conns = 0;
-            
-            // Connect to closest neighbors that don't create crossing edges
-            for (let i = 0; i < neighbors.length && conns < maxConns; i++) {
-                const neighbor = neighbors[i];
-                
-                if (!node.connections.includes(neighbor)) {
-                    if (!this._edgeWouldCross(node, neighbor)) {
-                        this._addEdge(node, neighbor);
-                        conns++;
-                    }
+            for (const { node: targetNode } of potentialTargetsWithDistances) {
+                if (actualEdgesCreated >= numEdgesToCreate) break;
+
+                // Check if an edge already exists (in either direction to avoid visual overlap)
+                const edgeExists = this.edges.some(edge => 
+                    (edge.source.id === sourceNode.id && edge.target.id === targetNode.id) ||
+                    (edge.source.id === targetNode.id && edge.target.id === sourceNode.id)
+                );
+
+                if (!edgeExists) {
+                    const edge = new Edge(sourceNode, targetNode);
+                    this.edges.push(edge);
+                    sourceNode.connections.push(edge); // For packet routing: sourceNode initiated this connection
+                    // targetNode.connections.push(edge); // Not adding to target's connections here to keep 'connections' as purely outgoing initiated by source
+                    actualEdgesCreated++;
                 }
             }
-        }
-    }
-
-    /**
-     * Calculate squared distance between two nodes
-     * @private
-     * @param {Node} a - First node
-     * @param {Node} b - Second node
-     * @returns {number} - Squared distance
-     */
-    _getDistanceSquared(a, b) {
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        return dx*dx + dy*dy;
-    }
-
-    /**
-     * Check if an edge between two nodes would cross any existing edges
-     * @private
-     * @param {Node} a - First node
-     * @param {Node} b - Second node
-     * @returns {boolean} - True if the edge would cross any existing edge
-     */
-    _edgeWouldCross(a, b) {
-        for (const edge of this.edges) {
-            if (edgesCross(a, b, edge.source, edge.target)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Add an edge between two nodes
-     * @private
-     * @param {Node} a - First node
-     * @param {Node} b - Second node
-     */
-    _addEdge(a, b) {
-        a.connections.push(b);
-        b.connections.push(a);
-        this.edges.push(new Edge(a, b));
+        });
     }
 
     /**
@@ -317,209 +191,266 @@ export class Network {
      * @param {number} dt - Time delta in seconds
      */
     updateNodePositions(dt) {
-        for (const node of this.nodes) {
-            // Add small random acceleration
-            node.vx += (Math.random() - 0.5) * CONFIG.NODE_ACCELERATION;
-            node.vy += (Math.random() - 0.5) * CONFIG.NODE_ACCELERATION;
-            
-            // Apply damping to prevent excessive speed
-            node.vx *= CONFIG.NODE_DAMPING;
-            node.vy *= CONFIG.NODE_DAMPING;
-            
-            // Limit maximum speed
-            const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
-            if (speed > CONFIG.NODE_MAX_SPEED) {
-                node.vx = (node.vx / speed) * CONFIG.NODE_MAX_SPEED;
-                node.vy = (node.vy / speed) * CONFIG.NODE_MAX_SPEED;
+        if (config.NODE_ACCELERATION === 0 && config.NODE_RETURN_FORCE_STRENGTH === 0) {
+             // If movement is disabled, nodes might still have residual velocity from previous states.
+            // Dampen any existing velocity quickly.
+            this.nodes.forEach(node => {
+                node.vx *= (1 - (1 - config.NODE_DAMPING) * 10 * dt); // Stronger damping if static
+                node.vy *= (1 - (1 - config.NODE_DAMPING) * 10 * dt);
+                node.x += node.vx * dt;
+                node.y += node.vy * dt;
+
+                // Clamp to canvas boundaries (optional, if nodes shouldn't pass edges)
+                // node.x = Math.max(config.NODE_RADIUS, Math.min(this.canvasWidth - config.NODE_RADIUS, node.x));
+                // node.y = Math.max(config.NODE_RADIUS, Math.min(this.canvasHeight - config.NODE_RADIUS, node.y));
+            });
+            return; // No further movement logic if static
+        }
+
+        // Original movement logic (will be mostly inactive if acceleration is 0)
+        this.nodes.forEach(node => {
+            // Random acceleration
+            const ax = (Math.random() - 0.5) * 2 * config.NODE_ACCELERATION;
+            const ay = (Math.random() - 0.5) * 2 * config.NODE_ACCELERATION;
+
+            node.vx += ax * dt;
+            node.vy += ay * dt;
+
+            // Damping
+            node.vx *= config.NODE_DAMPING;
+            node.vy *= config.NODE_DAMPING;
+
+            // Speed limit (optional, if NODE_MAX_SPEED is defined and > 0)
+            if (config.NODE_MAX_SPEED > 0) {
+                const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+                if (speed > config.NODE_MAX_SPEED) {
+                    node.vx = (node.vx / speed) * config.NODE_MAX_SPEED;
+                    node.vy = (node.vy / speed) * config.NODE_MAX_SPEED;
+                }
             }
             
-            // Calculate distance from original position
-            const dx = node.x - node.originalX;
-            const dy = node.y - node.originalY;
-            const distanceFromOrigin = Math.sqrt(dx * dx + dy * dy);
-            
-            // Apply return force proportional to distance from original position
-            if (distanceFromOrigin > 0) {
-                const returnForce = CONFIG.NODE_RETURN_FORCE * Math.pow(distanceFromOrigin / CONFIG.NODE_DRIFT_RADIUS, 2);
-                node.vx -= (dx / distanceFromOrigin) * returnForce;
-                node.vy -= (dy / distanceFromOrigin) * returnForce;
-            }
-            
-            // Hard limit on maximum distance from original position
-            if (distanceFromOrigin > CONFIG.NODE_DRIFT_RADIUS) {
-                node.x = node.originalX + (dx / distanceFromOrigin) * CONFIG.NODE_DRIFT_RADIUS;
-                node.y = node.originalY + (dy / distanceFromOrigin) * CONFIG.NODE_DRIFT_RADIUS;
+            // Apply velocity
+            node.x += node.vx * dt;
+            node.y += node.vy * dt;
+
+            // Return to original position (if configured)
+            if (config.NODE_RETURN_FORCE_STRENGTH > 0 && (node.originalX !== undefined && node.originalY !== undefined)) {
+                const dxToOrigin = node.originalX - node.x;
+                const dyToOrigin = node.originalY - node.y;
+                // Optional: if NODE_DRIFT_RADIUS is used, only apply return force if outside radius
+                // const distToOrigin = Math.sqrt(dxToOrigin * dxToOrigin + dyToOrigin * dyToOrigin);
+                // if (distToOrigin > config.NODE_DRIFT_RADIUS) { ... }
                 
-                // Bounce velocity when hitting the boundary
-                node.vx *= -0.5;
-                node.vy *= -0.5;
-            } else {
-                // Update position
-                node.x += node.vx;
-                node.y += node.vy;
+                node.vx += dxToOrigin * config.NODE_RETURN_FORCE_STRENGTH * dt;
+                node.vy += dyToOrigin * config.NODE_RETURN_FORCE_STRENGTH * dt;
             }
-        }
-    }
 
-    /**
-     * Update all packets in the network
-     * @param {number} dt - Time delta in seconds
-     * @param {Object} effects - Visual effects container
-     */
-    updatePackets(dt, effects) {
-        // Update active packets
-        for (let i = 0; i < this.packets.length; i++) {
-            const packet = this.packets[i];
-            if (!packet.active) continue;
-            
-            // Move the packet
-            packet.progress += dt * CONFIG.PACKET_SPEED;
-            
-            // Check if packet has arrived at its target node
-            if (packet.progress >= 1) {
-                this._handlePacketArrival(packet, effects);
-            }
-        }
-        
-        // Remove inactive packets (except those with active effects)
-        this._cleanupPackets();
-    }
-
-    /**
-     * Handle a packet arriving at its target node
-     * @private
-     * @param {Packet} packet - The packet that arrived
-     * @param {Object} effects - Visual effects container
-     */
-    _handlePacketArrival(packet, effects) {
-        packet.progress = 1;
-        const atNode = packet.target;
-        
-        // Create ripple effect at the node
-        effects.ripples.push({
-            node: atNode, 
-            time: 0, 
-            color: packet.color, 
-            type: (atNode.id === packet.finalTargetId ? 'target' : 'normal')
+            // Boundary checks (simple bounce or clamp)
+            const radius = config.NODE_RADIUS;
+            if (node.x < radius) { node.x = radius; node.vx *= -0.5; }
+            if (node.x > this.canvasWidth - radius) { node.x = this.canvasWidth - radius; node.vx *= -0.5; }
+            if (node.y < radius) { node.y = radius; node.vy *= -0.5; }
+            if (node.y > this.canvasHeight - radius) { node.y = this.canvasHeight - radius; node.vy *= -0.5; }
         });
-        
-        // If this is the final destination, mark packet as inactive
-        if (atNode.id === packet.finalTargetId) {
-            packet.active = false;
-            return;
-        }
-        
-        // Otherwise, redirect the packet
-        packet.hops++;
-        
-        // If hop limit reached, remove with blink effect
-        if (packet.hops > CONFIG.MAX_HOPS) {
-            this._removePacketWithEffect(packet, atNode, effects);
-            return;
-        }
-        
-        // Find valid neighbors to forward to
-        const neighbors = this._getValidNeighbors(atNode, packet.prevNode);
-        
-        if (neighbors.length === 0) {
-            packet.active = false;
-            return;
-        }
-        
-        // Forward to a random neighbor
-        const next = neighbors[Math.floor(Math.random() * neighbors.length)];
-        packet.prevNode = atNode;
-        packet.source = atNode;
-        packet.target = next;
-        packet.progress = 0;
 
-        // Add processing flash effect to the node that rerouted the packet
-        effects.processingFlashes.push({ node: atNode, time: 0 });
-        console.log('[network.js] Processing flash added for node:', atNode.id, 'at time:', performance.now());
-    }
-
-    /**
-     * Remove a packet with a visual effect
-     * @private
-     * @param {Packet} packet - The packet to remove
-     * @param {Node} node - The node where the effect should appear
-     * @param {Object} effects - Visual effects container
-     */
-    _removePacketWithEffect(packet, node, effects) {
-        packet.active = false;
-        packet.removed = true;
-        packet.removalEffect = {type: 'blink', node: node, time: 0};
-        effects.blinks.push(packet.removalEffect);
-    }
-
-    /**
-     * Get valid neighbors for forwarding a packet
-     * @private
-     * @param {Node} node - Current node
-     * @param {Node} prevNode - Previous node (to avoid backtracking)
-     * @returns {Node[]} - Array of valid neighbor nodes
-     */
-    _getValidNeighbors(node, prevNode) {
-        const neighbors = [];
-        for (let j = 0; j < node.connections.length; j++) {
-            if (node.connections[j] !== prevNode) {
-                neighbors.push(node.connections[j]);
-            }
-        }
-        return neighbors;
-    }
-
-    /**
-     * Remove inactive packets that don't have active effects
-     * @private
-     */
-    _cleanupPackets() {
-        const newPackets = [];
-        for (let i = 0; i < this.packets.length; i++) {
-            const p = this.packets[i];
-            if (p.active || (p.removed && p.removalEffect && p.removalEffect.time < CONFIG.BLINK_DURATION)) {
-                newPackets.push(p);
-            }
-        }
-        this.packets = newPackets;
+        // Node repulsion logic is removed as per request.
     }
 
     /**
      * Create and send a packet from a random source to a random target
      */
     sendRandomPacket() {
-        if (this.nodes.length < 2) return;
+        if (this.nodes.length < 2 || this.edges.length === 0) return;
+
+        const sourceIndex = randomInt(0, this.nodes.length - 1);
+        let source = this.nodes[sourceIndex];
         
-        // Select random source and target nodes
-        const source = this._getRandomNode();
-        let target = this._getRandomNode(source); // Exclude source
-        
-        // Ensure source has connections
-        if (!source.connections.length) return;
-        
-        // Create and send the packet
-        const firstHop = source.connections[Math.floor(Math.random() * source.connections.length)];
-        const color = target.color;
-        const packet = new Packet(source, firstHop, color);
-        packet.finalTargetId = target.id;
+        // Ensure source has outgoing connections defined by our new edge creation logic
+        const outgoingEdges = this.edges.filter(edge => edge.source.id === source.id);
+        if (outgoingEdges.length === 0) {
+            // Try to find a node that *does* have outgoing edges if the first pick doesn't
+            const possibleSources = shuffleArray(this.nodes.filter(n => this.edges.some(e => e.source.id === n.id)));
+            if (possibleSources.length === 0) return; // No nodes have outgoing edges
+            source = possibleSources[0];
+        }
+
+        const directConnections = this.edges.filter(edge => edge.source.id === source.id);
+        if (directConnections.length === 0) return; // Source has no outgoing edges
+
+        const targetEdge = directConnections[randomInt(0, directConnections.length - 1)];
+        const firstHopTarget = targetEdge.target;
+
+        // Determine a final target (could be multi-hop or the first hop itself)
+        let finalTarget = firstHopTarget;
+        if (config.PACKET_MAX_HOPS > 0 && Math.random() < 0.7) { // 70% chance to try multi-hop if allowed
+            let current = firstHopTarget;
+            let visitedForThisPath = new Set([source.id, firstHopTarget.id]);
+            for (let i = 0; i < config.PACKET_MAX_HOPS -1; i++) { // -1 because first hop is already chosen
+                const potentialNextHops = this.edges.filter(e => e.source.id === current.id && !visitedForThisPath.has(e.target.id));
+                if (potentialNextHops.length === 0) break;
+                current = potentialNextHops[randomInt(0, potentialNextHops.length - 1)].target;
+                visitedForThisPath.add(current.id);
+                finalTarget = current;
+                if (Math.random() < 0.3) break; // Chance to stop early at an intermediate hop
+            }
+        }
+
+        const packetColor = `hsl(${randomInt(0, 360)}, 70%, 70%)`;
+        const packet = new Packet(source, firstHopTarget, finalTarget.id, packetColor, 0);
         this.packets.push(packet);
-        
-        // Track emission time
+
+        this.effects.nodePulses.push({ 
+            node: source, 
+            time: 0, 
+            type: 'send',
+            color: config.NODE_PULSE_SEND_COLOR
+        });
+
         source.lastEmitTime = performance.now ? performance.now() : Date.now();
     }
 
     /**
-     * Get a random node from the network
-     * @private
-     * @param {Node} [exclude] - Node to exclude from selection
-     * @returns {Node} - A random node
+     * Handle packet arrival at a node
+     * @param {Packet} packet - The arrived packet
+     * @param {Node} atNode - The node where the packet arrived
      */
-    _getRandomNode(exclude = null) {
-        let node;
-        do {
-            node = this.nodes[Math.floor(Math.random() * this.nodes.length)];
-        } while (node === exclude && this.nodes.length > 1);
-        return node;
+    _handlePacketArrival(packet, atNode) {
+        packet.progress = 0; // Reset progress for the next hop
+        packet.path.push(atNode.id);
+
+        // effects.ripples.push({ node: atNode, time: 0, color: packet.color, type: (atNode.id === packet.finalTargetId) ? 'target' : 'normal' }); // Removed ripple creation
+
+        if (atNode.id === packet.finalTargetId) {
+            packet.active = false;
+            this.effects.nodePulses.push({ 
+                node: atNode, 
+                time: 0, 
+                type: 'receive_final', 
+                color: config.NODE_PULSE_RECEIVE_FINAL_COLOR 
+            });
+            this.effects.processingFlashes.push({ node: atNode, time: 0 });
+            return;
+        }
+
+        packet.hops++;
+        if (packet.hops >= config.PACKET_MAX_HOPS) {
+            packet.active = false;
+            // Optional: effect for expired packet
+            return;
+        }
+
+        // Find next hop, avoid going back to the immediate previous node in the path
+        const lastNodeId = packet.path.length > 1 ? packet.path[packet.path.length - 2] : null;
+        const potentialNextEdges = this.edges.filter(edge => 
+            edge.source.id === atNode.id && 
+            edge.target.id !== lastNodeId && 
+            !packet.path.includes(edge.target.id) // Avoid cycles in the current path
+        );
+
+        if (potentialNextEdges.length === 0) {
+            // If no valid non-cyclic forward path, try any path that isn't immediately back
+            const fallbackEdges = this.edges.filter(edge => edge.source.id === atNode.id && edge.target.id !== lastNodeId);
+            if (fallbackEdges.length > 0) {
+                const nextEdge = fallbackEdges[randomInt(0, fallbackEdges.length - 1)];
+                packet.sourceNode = atNode;
+                packet.targetNode = nextEdge.target;
+            } else {
+                 // No way forward, even allowing going back to non-immediate previous nodes
+                const anyNextEdge = this.edges.filter(edge => edge.source.id === atNode.id);
+                if (anyNextEdge.length > 0) {
+                    const nextEdge = anyNextEdge[randomInt(0, anyNextEdge.length - 1)];
+                    packet.sourceNode = atNode;
+                    packet.targetNode = nextEdge.target;
+                } else {
+                    packet.active = false; // No outgoing edges from this node
+                }
+            }
+        } else {
+            const nextEdge = potentialNextEdges[randomInt(0, potentialNextEdges.length - 1)];
+            packet.sourceNode = atNode;
+            packet.targetNode = nextEdge.target;
+        }
+
+        // If the packet is still active, it's being routed. Add a 'route' pulse.
+        // The processingFlash indicates the node handled the packet, regardless of successful routing.
+        if (packet.active) {
+            this.effects.nodePulses.push({
+                node: atNode,
+                time: 0,
+                type: 'route',
+                color: config.NODE_PULSE_ROUTE_COLOR // This color will be used by the renderer
+            });
+        }
+        this.effects.processingFlashes.push({ node: atNode, time: 0 });
+    }
+
+    /**
+     * Update all packets in the network
+     * @param {number} dt - Delta time in seconds
+     */
+    updatePackets(dt) {
+        // Filter out inactive packets first, and create blinks for those removed due to inactivity
+        const stillActivePackets = [];
+        for (let i = this.packets.length - 1; i >= 0; i--) {
+            const packet = this.packets[i];
+            if (packet.active) {
+                stillActivePackets.push(packet);
+            } else {
+                // Packet became inactive, create a blink effect at its last known sourceNode or targetNode
+                const blinkNode = packet.sourceNode || (packet.path.length > 0 ? this.nodes.find(n => n.id === packet.path[packet.path.length-1]) : null);
+                if (blinkNode) {
+                    this.effects.blinks.push({
+                        node: blinkNode,
+                        time: 0,
+                        // Blink properties will be taken from config in renderer
+                    });
+                }
+            }
+        }
+        this.packets = stillActivePackets.reverse(); // Maintain order if it matters
+
+        this.packets.forEach(packet => {
+            if (!packet.active) return;
+
+            packet.progress += config.PACKET_SPEED * dt;
+
+            if (packet.progress >= 1) {
+                packet.progress = 1; // Ensure it lands exactly for logic
+                this._handlePacketArrival(packet, packet.targetNode);
+                // If still active after arrival (i.e., has a new target), progress is reset in _handlePacketArrival
+            }
+
+            if (packet.active) { // Update position if still active (might have been deactivated in _handlePacketArrival)
+                const dx = packet.targetNode.x - packet.sourceNode.x;
+                const dy = packet.targetNode.y - packet.sourceNode.y;
+                packet.x = packet.sourceNode.x + dx * packet.progress;
+                packet.y = packet.sourceNode.y + dy * packet.progress;
+            }
+        });
+    }
+
+    /**
+     * Advances the time for all visual effects and filters out expired ones.
+     * @param {number} dt - Delta time in seconds.
+     */
+    advanceEffects(dt) {
+        // Advance time for all effects
+        this.effects.nodePulses.forEach(p => p.time += dt);
+        this.effects.processingFlashes.forEach(pf => pf.time += dt);
+        this.effects.blinks.forEach(b => b.time += dt);
+
+        // Filter effects based on their duration from the central config
+        this.effects.nodePulses = this.effects.nodePulses.filter(p => p.time < config.NODE_PULSE_DURATION_SECONDS);
+        this.effects.processingFlashes = this.effects.processingFlashes.filter(pf => pf.time < config.PROCESSING_FLASH_DURATION_SECONDS);
+        this.effects.blinks = this.effects.blinks.filter(b => b.time < config.BLINK_DURATION_SECONDS);
+
+        // Ripples would be handled here too if they existed
+        // this.effects.ripples.forEach(r => r.time += dt);
+        // this.effects.ripples = this.effects.ripples.filter(r => r.time < config.RIPPLE_DURATION_SECONDS);
     }
 }
-console.log('network.js loaded');
+
+// Initial log to confirm loading
+if (config.DEBUG_MODE) {
+    console.log('[network.js] Network module loaded, using central config.');
+}

@@ -1,46 +1,7 @@
 // renderer.js
 // Handles drawing the network on the canvas
 
-import { networkEffects } from './network.js';
-
-// Visual constants
-const VISUAL = {
-    // Nodes
-    NODE_RADIUS: 22,
-    NODE_ALPHA: 0.6,
-    NODE_SHADOW_BLUR: 5,
-    
-    // Packets
-    PACKET_RADIUS: 10,
-    PACKET_ALPHA: 0.7,
-    PACKET_SHADOW_BLUR: 8,
-    
-    // Edges
-    EDGE_COLOR: 'rgba(60,60,60,0.9)',
-    EDGE_WIDTH: 5,
-    
-    // Ripples
-    RIPPLE_BASE_RADIUS: 22,
-    RIPPLE_MAX_RADIUS: 44,
-    RIPPLE_WIDTH: 5,
-    RIPPLE_ALPHA_START: 0.5,
-    RIPPLE_FADE_RATE: 0.7,
-    RIPPLE_TARGET_SPACING: 10,
-    
-    // Blinks
-    BLINK_RADIUS: 26,
-    BLINK_COLOR: 'red',
-    BLINK_WIDTH: 8,
-    BLINK_SHADOW_BLUR: 15,
-    BLINK_ALPHA: 0.7,
-    BLINK_DURATION_FACTOR: 4,
-
-    // Processing Flash
-    PROCESSING_FLASH_COLOR: 'rgba(255, 255, 150, 0.7)', 
-    PROCESSING_FLASH_DURATION: 0.3, 
-    PROCESSING_FLASH_MAX_RADIUS_FACTOR: 1.3, 
-    PROCESSING_FLASH_SHADOW_BLUR: 7 
-};
+import { config } from './config.js'; // Added import for new config
 
 /**
  * Main rendering function for the network
@@ -53,92 +14,36 @@ export function renderNetwork(ctx, network, now) {
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     // Draw all elements in correct order (back to front)
-    drawRipples(ctx);
-    drawBlinks(ctx);
-    drawProcessingFlashes(ctx);
+    drawBlinks(ctx, network.effects.blinks);
+    drawProcessingFlashes(ctx, network.effects.processingFlashes);
     drawEdges(ctx, network.edges);
     drawPackets(ctx, network.packets);
-    drawNodes(ctx, network.nodes, now);
-}
-
-/**
- * Draw ripple effects
- * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
- */
-function drawRipples(ctx) {
-    for (const ripple of networkEffects.ripples) {
-        const {node, time, color, type} = ripple;
-        const radius = VISUAL.RIPPLE_BASE_RADIUS + time * VISUAL.RIPPLE_MAX_RADIUS;
-        const alpha = Math.max(0, VISUAL.RIPPLE_ALPHA_START - time * VISUAL.RIPPLE_FADE_RATE);
-        
-        if (alpha <= 0) continue;
-        
-        ctx.save();
-        
-        if (type === 'target') {
-            drawTargetRipple(ctx, node, radius, alpha);
-        } else {
-            drawNormalRipple(ctx, node, radius, alpha, color || node.color);
-        }
-        
-        ctx.restore();
-    }
-}
-
-/**
- * Draw a target ripple (3 concentric circles)
- * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
- * @param {Object} node - The node at the center of the ripple
- * @param {number} radius - Base radius of the ripple
- * @param {number} alpha - Opacity of the ripple
- */
-function drawTargetRipple(ctx, node, radius, alpha) {
-    ctx.strokeStyle = VISUAL.EDGE_COLOR;
-    ctx.globalAlpha = alpha;
-    ctx.lineWidth = VISUAL.RIPPLE_WIDTH;
-    
-    for (let i = 0; i < 3; i++) {
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, radius + i * VISUAL.RIPPLE_TARGET_SPACING, 0, 2 * Math.PI);
-        ctx.stroke();
-    }
-}
-
-/**
- * Draw a normal ripple (single circle)
- * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
- * @param {Object} node - The node at the center of the ripple
- * @param {number} radius - Radius of the ripple
- * @param {number} alpha - Opacity of the ripple
- * @param {string} color - Color of the ripple
- */
-function drawNormalRipple(ctx, node, radius, alpha, color) {
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
-    ctx.strokeStyle = color;
-    ctx.globalAlpha = alpha;
-    ctx.lineWidth = VISUAL.RIPPLE_WIDTH;
-    ctx.stroke();
+    drawNodes(ctx, network.nodes, now, network.effects.nodePulses); // Pass nodePulses
+    drawNodePulses(ctx, network.effects.nodePulses);
 }
 
 /**
  * Draw blink effects (for packet removal)
  * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
+ * @param {Array} blinks - Array of blink effect objects
  */
-function drawBlinks(ctx) {
-    for (const {node, time} of networkEffects.blinks) {
-        const alpha = VISUAL.BLINK_ALPHA * (1 - Math.abs(time * VISUAL.BLINK_DURATION_FACTOR - 1));
+function drawBlinks(ctx, blinks) {
+    if (!blinks) return;
+    for (const {node, time} of blinks) {
+        // Alpha calculation using the derived curve factor for smooth fade in/out
+        const timeFactor = time * config.BLINK_ALPHA_CURVE_FACTOR; // Use config derived value
+        const alpha = config.BLINK_ALPHA_START * (1 - Math.abs(timeFactor - 1)); // Use config
         
         if (alpha <= 0) continue;
         
         ctx.save();
         ctx.beginPath();
-        ctx.arc(node.x, node.y, VISUAL.BLINK_RADIUS, 0, 2 * Math.PI);
-        ctx.strokeStyle = VISUAL.BLINK_COLOR;
+        ctx.arc(node.x, node.y, config.BLINK_RADIUS, 0, 2 * Math.PI); // Use config
+        ctx.strokeStyle = config.BLINK_COLOR; // Use config
         ctx.globalAlpha = alpha;
-        ctx.lineWidth = VISUAL.BLINK_WIDTH;
-        ctx.shadowColor = VISUAL.BLINK_COLOR;
-        ctx.shadowBlur = VISUAL.BLINK_SHADOW_BLUR;
+        ctx.lineWidth = config.BLINK_WIDTH; // Use config
+        ctx.shadowColor = config.BLINK_COLOR; // Use config
+        ctx.shadowBlur = config.BLINK_SHADOW_BLUR; // Use config
         ctx.stroke();
         ctx.restore();
     }
@@ -147,40 +52,51 @@ function drawBlinks(ctx) {
 /**
  * Draw processing flash effects on nodes
  * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
+ * @param {Array} processingFlashes - Array of processing flash effect objects
  */
-function drawProcessingFlashes(ctx) {
-    if (networkEffects.processingFlashes.length > 0) {
-        console.log('[renderer.js] drawProcessingFlashes called. Flashes to draw:', networkEffects.processingFlashes.length);
+function drawProcessingFlashes(ctx, processingFlashes) {
+    if (!processingFlashes) return;
+    if (config.DEBUG_MODE && processingFlashes.length > 0) {
+        // console.log('[renderer.js] Drawing processingFlashes. Count:', processingFlashes.length);
     }
-    for (const flash of networkEffects.processingFlashes) {
-        const { node, time } = flash;
-        const progress = time / VISUAL.PROCESSING_FLASH_DURATION;
 
-        console.log(`[renderer.js] Drawing flash for node ${node.id}: progress=${progress.toFixed(3)}, time=${time.toFixed(3)}`);
+    for (const { node, time } of processingFlashes) {
+        // Calculate progress (0 to 1) over the flash duration
+        const progress = Math.min(1, time / config.PROCESSING_FLASH_DURATION_SECONDS); // Use config
 
-        if (progress >= 1 || progress < 0) {
-            console.log(`[renderer.js] Flash for node ${node.id} skipped (progress out of bounds): ${progress.toFixed(3)}`);
-            continue;
+        // Alpha: Fade in and out quickly (e.g., peak at midpoint)
+        // Simple triangular fade: 0 -> 1 -> 0
+        let alpha = 0;
+        if (progress < 0.5) {
+            alpha = progress * 2; // Fade in from 0 to 1
+        } else {
+            alpha = (1 - progress) * 2; // Fade out from 1 to 0
         }
+        alpha = Math.max(0, Math.min(1, alpha)); // Clamp alpha between 0 and 1
+        
+        // Radius: Expand and then optionally shrink, or just expand
+        const baseRadius = config.NODE_RADIUS; // Use config
+        const maxRadius = baseRadius * config.PROCESSING_FLASH_RADIUS_FACTOR; // Use config
+        const flashRadius = baseRadius + (maxRadius - baseRadius) * progress; // Simple expansion
 
-        const baseRadius = VISUAL.NODE_RADIUS;
-        const flashRadius = baseRadius * (1 + progress * (VISUAL.PROCESSING_FLASH_MAX_RADIUS_FACTOR - 1));
-        const alpha = VISUAL.PACKET_ALPHA * (1 - progress);
-
-        if (alpha <= 0) {
-            console.log(`[renderer.js] Flash for node ${node.id} skipped (alpha too low): ${alpha.toFixed(3)}`);
+        if (alpha <= 0.01) { // Use a small threshold to avoid drawing invisible flashes
+            if (config.DEBUG_MODE) {
+                // console.log(`[renderer.js] Flash for node ${node.id} skipped (alpha too low): ${alpha.toFixed(3)}`);
+            }
             continue;
         }
         
-        console.log(`[renderer.js] Node ${node.id} flash: radius=${flashRadius.toFixed(2)}, alpha=${alpha.toFixed(2)}`);
+        if (config.DEBUG_MODE) {
+            // console.log(`[renderer.js] Node ${node.id} flash: radius=${flashRadius.toFixed(2)}, alpha=${alpha.toFixed(2)}, time: ${time.toFixed(3)}`);
+        }
 
         ctx.save();
         ctx.beginPath();
         ctx.arc(node.x, node.y, flashRadius, 0, 2 * Math.PI);
-        ctx.fillStyle = VISUAL.PROCESSING_FLASH_COLOR;
-        ctx.globalAlpha = alpha;
-        ctx.shadowColor = VISUAL.PROCESSING_FLASH_COLOR;
-        ctx.shadowBlur = VISUAL.PROCESSING_FLASH_SHADOW_BLUR;
+        ctx.fillStyle = config.PROCESSING_FLASH_COLOR; // Use config
+        ctx.globalAlpha = alpha; // Use calculated alpha for the effect
+        ctx.shadowColor = config.PROCESSING_FLASH_COLOR; // Use config
+        ctx.shadowBlur = config.PROCESSING_FLASH_SHADOW_BLUR; // Use config
         ctx.fill();
         ctx.restore();
     }
@@ -193,8 +109,8 @@ function drawProcessingFlashes(ctx) {
  */
 function drawEdges(ctx, edges) {
     ctx.save();
-    ctx.strokeStyle = VISUAL.EDGE_COLOR;
-    ctx.lineWidth = VISUAL.EDGE_WIDTH;
+    ctx.strokeStyle = config.EDGE_COLOR; // Use config
+    ctx.lineWidth = config.EDGE_WIDTH; // Use config
     
     for (const edge of edges) {
         ctx.beginPath();
@@ -218,37 +134,37 @@ function drawPackets(ctx, packets) {
         const easedProgress = easeOutQuad(packet.progress);
 
         // Interpolate position based on eased progress
-        const currentX = packet.source.x + (packet.target.x - packet.source.x) * easedProgress;
-        const currentY = packet.source.y + (packet.target.y - packet.source.y) * easedProgress;
+        const currentX = packet.sourceNode.x + (packet.targetNode.x - packet.sourceNode.x) * easedProgress;
+        const currentY = packet.sourceNode.y + (packet.targetNode.y - packet.sourceNode.y) * easedProgress;
         
         ctx.save();
 
-        // Draw trails (simple version: 2 trailing circles)
-        const trailCount = 2;
-        const trailSpacingFactor = 0.05; // How far back the trail elements are, relative to progress
-        const trailAlphaFactor = 0.5; // How much dimmer trail elements are
+        // Draw trails
+        const trailCount = config.PACKET_TRAIL_COUNT; // Use config
+        const trailSpacingFactor = config.PACKET_TRAIL_SPACING_FACTOR; // Use config
+        const trailAlphaFactor = config.PACKET_TRAIL_ALPHA_FACTOR; // Use config
 
         for (let i = trailCount; i > 0; i--) {
             const trailProgress = Math.max(0, easedProgress - i * trailSpacingFactor);
-            if (trailProgress === easedProgress) continue; // Don't draw on top of main packet if progress is too low
+            if (trailProgress === easedProgress && easedProgress > 0) continue; // Don't draw on top of main packet if progress is low, unless progress is 0
 
-            const trailX = packet.source.x + (packet.target.x - packet.source.x) * trailProgress;
-            const trailY = packet.source.y + (packet.target.y - packet.source.y) * trailProgress;
+            const trailX = packet.sourceNode.x + (packet.targetNode.x - packet.sourceNode.x) * trailProgress;
+            const trailY = packet.sourceNode.y + (packet.targetNode.y - packet.sourceNode.y) * trailProgress;
             
-            ctx.globalAlpha = VISUAL.PACKET_ALPHA * Math.pow(trailAlphaFactor, i);
+            ctx.globalAlpha = config.PACKET_ALPHA * Math.pow(trailAlphaFactor, i); // Use config
             ctx.beginPath();
-            ctx.arc(trailX, trailY, VISUAL.PACKET_RADIUS * (1 - 0.2 * i), 0, 2 * Math.PI); // Slightly smaller trails
+            ctx.arc(trailX, trailY, config.PACKET_RADIUS * (1 - 0.2 * i), 0, 2 * Math.PI); // Slightly smaller trails, Use config for PACKET_RADIUS
             ctx.fillStyle = packet.color;
             ctx.fill();
         }
 
         // Draw main packet
-        ctx.globalAlpha = VISUAL.PACKET_ALPHA;
+        ctx.globalAlpha = config.PACKET_ALPHA; // Use config
         ctx.beginPath();
-        ctx.arc(currentX, currentY, VISUAL.PACKET_RADIUS, 0, 2 * Math.PI);
+        ctx.arc(currentX, currentY, config.PACKET_RADIUS, 0, 2 * Math.PI); // Use config
         ctx.fillStyle = packet.color;
         ctx.shadowColor = packet.color;
-        ctx.shadowBlur = VISUAL.PACKET_SHADOW_BLUR;
+        ctx.shadowBlur = config.PACKET_SHADOW_BLUR; // Use config
         ctx.fill();
         ctx.restore();
     }
@@ -259,23 +175,115 @@ function drawPackets(ctx, packets) {
  * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
  * @param {Array} nodes - Array of node objects
  * @param {number} now - Current timestamp for animations
+ * @param {Array} nodePulses - Array of active node pulse effects
  */
-export function drawNodes(ctx, nodes, now) {
+export function drawNodes(ctx, nodes, now, nodePulses) { // Added nodePulses parameter
+    if (!nodes) return;
+
+    ctx.save();
+    if (config.ENABLE_NODE_SHADOWS) {
+        ctx.shadowColor = config.NODE_SHADOW_COLOR;
+        ctx.shadowBlur = config.NODE_SHADOW_BLUR;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+    }
+
     for (const node of nodes) {
         ctx.save();
-        ctx.globalAlpha = VISUAL.NODE_ALPHA;
+        ctx.globalAlpha = config.NODE_ALPHA; // Use config
 
-        // Breathing effect
-        const breathCycle = (now / 2000) * Math.PI * 2; // Adjust 2000 for speed
-        const breathAmount = Math.sin(breathCycle + node.id) * 2; // node.id for phase offset, 2 for pixel amplitude
-        const currentRadius = VISUAL.NODE_RADIUS + breathAmount;
+        let fillColor = node.color; // Default color
+        let currentRadius = config.NODE_RADIUS; // Default radius
 
+        // Check for active pulses for this node
+        const activePulses = nodePulses.filter( // Use passed nodePulses
+            p => p.node.id === node.id && p.time < config.NODE_PULSE_DURATION_SECONDS
+        );
+
+        if (activePulses.length > 0) {
+            // Get the most recent active pulse (though typically there should only be one or they'd overlap fast)
+            const currentPulse = activePulses.sort((a, b) => b.time - a.time)[0];
+            
+            // Pulse color overrides default and breathing effect color
+            // Fade out the pulse color's alpha
+            const pulseProgress = currentPulse.time / config.NODE_PULSE_DURATION_SECONDS;
+            const pulseAlpha = Math.max(0, 1 - pulseProgress);
+            
+            // Assuming pulse.color is like 'rgba(r,g,b,a)'
+            // We want to modulate the 'a' part based on pulseAlpha
+            const basePulseColor = currentPulse.color.match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+            if (basePulseColor) {
+                const r = basePulseColor[1];
+                const g = basePulseColor[2];
+                const b = basePulseColor[3];
+                const baseAlpha = parseFloat(basePulseColor[4]);
+                fillColor = `rgba(${r}, ${g}, ${b}, ${baseAlpha * pulseAlpha})`;
+            } else {
+                fillColor = currentPulse.color; // Fallback if color format is unexpected
+            }
+            // During a color pulse, use standard radius (no breathing)
+            currentRadius = config.NODE_RADIUS + config.NODE_BREATHING_AMPLITUDE; // Or just config.NODE_RADIUS for no size change
+
+        } else {
+            // No active color pulse, apply breathing effect
+            const breathCycle = (now / config.NODE_BREATHING_SPEED) * Math.PI * 2; // Use config
+            const breathAmount = Math.sin(breathCycle + node.id) * config.NODE_BREATHING_AMPLITUDE; // Use config, node.id for phase offset
+            currentRadius = config.NODE_RADIUS + breathAmount; // Use config
+        }
+        
         ctx.beginPath();
         ctx.arc(node.x, node.y, currentRadius, 0, 2 * Math.PI);
-        ctx.fillStyle = node.color;
-        ctx.shadowColor = node.color;
-        ctx.shadowBlur = VISUAL.NODE_SHADOW_BLUR;
+        ctx.fillStyle = fillColor;
         ctx.fill();
         ctx.restore();
     }
+
+    // Clear shadow settings for subsequent drawing operations that shouldn't have shadows
+    if (config.ENABLE_NODE_SHADOWS) {
+        ctx.shadowColor = 'transparent'; // Or 'rgba(0,0,0,0)'
+        ctx.shadowBlur = 0;
+    }
+    ctx.restore(); // Restore to state before any shadow or path operations for nodes
+}
+
+/**
+ * Draw node pulse effects (e.g., for sending, receiving, routing packets)
+ * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
+ * @param {Array} nodePulses - Array of node pulse effect objects
+ */
+function drawNodePulses(ctx, nodePulses) {
+    if (!nodePulses || nodePulses.length === 0) return;
+
+    nodePulses.forEach(pulse => {
+        const node = pulse.node;
+        if (!node) return;
+
+        const progress = pulse.time / config.NODE_PULSE_DURATION_SECONDS;
+        if (progress < 0 || progress > 1) return; // Should be filtered by script.js, but good practice
+
+        const currentRadius = config.NODE_RADIUS + (config.NODE_RADIUS * (config.NODE_PULSE_MAX_RADIUS_FACTOR -1) * progress);
+        const alpha = 1 - progress; // Simple linear fade out
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, currentRadius, 0, Math.PI * 2);
+        
+        // Modify pulse color to include current alpha
+        const baseColor = pulse.color.startsWith('rgba') ? pulse.color.substring(0, pulse.color.lastIndexOf(',')) : 'rgba(255,255,255';
+        ctx.strokeStyle = `${baseColor}, ${alpha.toFixed(3)})`;
+        
+        ctx.lineWidth = config.NODE_PULSE_LINE_WIDTH;
+        ctx.stroke();
+        ctx.restore();
+
+        if (config.DEBUG_MODE) {
+            // console.log(`[renderer.js] Drawing pulse for node ${node.id}: time=${pulse.time.toFixed(2)}, radius=${currentRadius.toFixed(2)}, alpha=${alpha.toFixed(2)}`);
+        }
+    });
+}
+
+// Add a log to confirm loading, only if not already present or if DEBUG_MODE is on
+if (typeof rendererJsLoaded === 'undefined') {
+    if (config.DEBUG_MODE) console.log('renderer.js loaded, using central config');
+    globalThis.rendererJsLoaded = true; // Prevent multiple logs if script is somehow re-evaluated
 }

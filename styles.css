@@ -23,12 +23,44 @@ body {
     left: 0;
     width: 100vw;
     height: 100vh;
-    z-index: 0;
+    z-index: -1; /* Adjusted z-index */
     display: block;
     background-color: #000;
     pointer-events: none; /* Let UI elements be clickable */
     /* Optional: add a subtle border or shadow for visibility */
     /* box-shadow: 0 0 20px 2px #333; */
+}
+
+#background-canvas-2 {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -2; /* Adjusted z-index, behind the first canvas */
+    display: block;
+    background-color: #000; /* Same background, or could be different */
+    pointer-events: none;
+    opacity: 0.3; /* Make it translucent */
+}
+
+#content-backdrop {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 70vmin; /* Responsive size based on viewport */
+    height: 70vmin;
+    background: radial-gradient(circle, 
+        rgba(10, 10, 10, 0.9) 0%,   /* Darker, more opaque center */
+        rgba(10, 10, 10, 0.8) 20%,
+        rgba(15, 15, 15, 0.6) 40%,
+        rgba(15, 15, 15, 0.3) 60%,
+        rgba(0, 0, 0, 0) 80%       /* Fade to fully transparent */
+    );
+    border-radius: 50%;
+    z-index: 0; /* Above canvases, below main content */
+    pointer-events: none; /* Allow clicks to pass through to content if needed, though usually not for a backdrop */
 }
 
 .container {
