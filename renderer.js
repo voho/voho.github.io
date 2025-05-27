@@ -8,13 +8,12 @@ const VISUAL = {
     // Nodes
     NODE_RADIUS: 22,
     NODE_ALPHA: 0.6,
-    NODE_SHADOW_BLUR: 12,
+    NODE_SHADOW_BLUR: 5,
     
     // Packets
     PACKET_RADIUS: 10,
     PACKET_ALPHA: 0.7,
-    PACKET_SHADOW_BLUR: 10,
-    PACKET_BLUR: '2px',
+    PACKET_SHADOW_BLUR: 8,
     
     // Edges
     EDGE_COLOR: 'rgba(60,60,60,0.9)',
@@ -32,7 +31,7 @@ const VISUAL = {
     BLINK_RADIUS: 26,
     BLINK_COLOR: 'red',
     BLINK_WIDTH: 8,
-    BLINK_SHADOW_BLUR: 18,
+    BLINK_SHADOW_BLUR: 15,
     BLINK_ALPHA: 0.7,
     BLINK_DURATION_FACTOR: 4
 };
@@ -188,17 +187,14 @@ function drawPackets(ctx, packets) {
             const trailY = packet.source.y + (packet.target.y - packet.source.y) * trailProgress;
             
             ctx.globalAlpha = VISUAL.PACKET_ALPHA * Math.pow(trailAlphaFactor, i);
-            ctx.filter = `blur(${VISUAL.PACKET_BLUR})`;
             ctx.beginPath();
             ctx.arc(trailX, trailY, VISUAL.PACKET_RADIUS * (1 - 0.2 * i), 0, 2 * Math.PI); // Slightly smaller trails
             ctx.fillStyle = packet.color;
-            // No shadow for trails to keep it subtle and performant
             ctx.fill();
         }
 
         // Draw main packet
         ctx.globalAlpha = VISUAL.PACKET_ALPHA;
-        ctx.filter = `blur(${VISUAL.PACKET_BLUR})`;
         ctx.beginPath();
         ctx.arc(currentX, currentY, VISUAL.PACKET_RADIUS, 0, 2 * Math.PI);
         ctx.fillStyle = packet.color;
