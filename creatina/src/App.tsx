@@ -5,29 +5,38 @@ import Lightbox from './components/Lightbox/Lightbox';
 interface GalleryImage {
   src: string;
   description: string;
-  date: string;
+  date: Date;
 }
+
+// Format date to a readable string (e.g., "May 15, 2024")
+const formatDate = (date: Date): string => {
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  }).format(date);
+};
 
 const images: GalleryImage[] = [
   {
     src: 'k1.jpeg',
     description: 'dummy image',
-    date: '2024-05-15'
+    date: new Date('2024-05-15')
   },
   {
     src: 'k2.jpeg',
     description: 'dummy image',
-    date: '2024-05-20'
+    date: new Date('2024-05-20')
   },
   {
     src: 'k3.jpg',
     description: 'dummy image',
-    date: '2024-05-25'
+    date: new Date('2024-05-25')
   },
   {
     src: 'k4.jpeg',
     description: 'dummy image',
-    date: '2024-05-30'
+    date: new Date('2024-05-30')
   }
 ];
 
@@ -43,10 +52,12 @@ const Header = () => (
 );
 
 // ImageInfo Component
-const ImageInfo = ({ description, date }: { description: string; date: string }) => (
+const ImageInfo = ({ description, date }: { description: string; date: Date }) => (
   <div className="image-info">
-    <p>{description}</p>
-    <span className="date">{date}</span>
+    <span>{description}</span>
+    <span className="date" title={date.toISOString().split('T')[0]}>
+      {formatDate(date)}
+    </span>
   </div>
 );
 
@@ -103,7 +114,10 @@ const Gallery = () => {
         ))}
       </main>
       <Lightbox 
-        image={selectedIndex !== null ? images[selectedIndex] : null} 
+        image={selectedIndex !== null ? {
+          ...images[selectedIndex],
+          date: formatDate(images[selectedIndex].date)
+         } : null} 
         onClose={() => setSelectedIndex(null)}
         onNext={handleNext}
         onPrev={handlePrev}

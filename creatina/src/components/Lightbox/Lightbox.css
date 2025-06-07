@@ -97,7 +97,7 @@
   color: var(--lightbox-text);
   text-align: center;
   flex-grow: 1;
-  padding: 0 var(--lightbox-spacing);
+  padding: 0.3rem var(--lightbox-spacing);
 }
 
 .lightbox-info p {
