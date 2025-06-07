@@ -2,6 +2,8 @@ import { useState } from 'react';
 import './App.css';
 import Lightbox from './components/Lightbox/Lightbox';
 
+const GH_PAGES_PUBLIC = 'https://voho.github.io/creatina/public';
+
 interface GalleryImage {
   src: string;
   description: string;
@@ -65,7 +67,7 @@ const ImageInfo = ({ description, date }: { description: string; date: Date }) =
 const ImageContainer = ({ src, alt }: { src: string; alt: string }) => (
   <div className="image-container">
     <img 
-      src={`${process.env.PUBLIC_URL}/images/${src}`} 
+      src={`${process.env.PUBLIC_URL || GH_PAGES_PUBLIC}/images/${src}`} 
       alt={alt}
       loading="lazy"
     />
