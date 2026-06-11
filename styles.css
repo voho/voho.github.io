@@ -18,17 +18,31 @@ body {
     overflow-x: hidden;
 }
 
-#background-canvas {
+#background-canvas,
+#background-canvas-depth {
     position: fixed;
     top: 0;
     left: 0;
     width: 100vw;
     height: 100vh;  /* fallback */
     height: 100lvh; /* stable on mobile while browser bars collapse */
-    z-index: -1;
     display: block;
-    background-color: #05070d;
     pointer-events: none;
+}
+
+/* Sharp near layer; transparent so the blurred layer shows through. */
+#background-canvas {
+    z-index: -1;
+    background-color: transparent;
+}
+
+/* Far layer: GPU-blurred for a depth-of-field look. Slightly scaled up so
+   the blur's soft edges stay outside the viewport. */
+#background-canvas-depth {
+    z-index: -2;
+    background-color: #05070d;
+    filter: blur(5px);
+    transform: scale(1.05);
 }
 
 #content-backdrop {
@@ -65,8 +79,17 @@ h1 {
     font-size: clamp(2.4rem, 7vw, 3.2rem);
     font-weight: 700;
     letter-spacing: 0.01em;
-    margin-bottom: 2.2rem;
+    margin-bottom: 0.5rem;
     text-shadow: 0 0 36px rgba(98, 156, 255, 0.35), 0 2px 18px rgba(0, 0, 0, 0.8);
+}
+
+.subtitle {
+    font-size: clamp(1rem, 2.8vw, 1.2rem);
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.8);
+    margin-bottom: 2.2rem;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.8);
 }
 
 .buttons {
