@@ -1,79 +1,75 @@
 // config.js
-// Centralized configuration for the Network Simulation
+// All tuning knobs for the background network simulation.
 
 export const config = {
-    // General Settings
-    DEBUG_MODE: false,
-    CANVAS_BACKGROUND_COLOR: 'rgba(10, 15, 25, 1)', // Dark blue-ish background
+    // --- Layout ------------------------------------------------------------
+    // Node spacing is derived from the viewport area and clamped to this
+    // range, so density feels the same from phones up to large monitors.
+    SPACING_AREA_DIVISOR: 130,
+    SPACING_MIN: 88,
+    SPACING_MAX: 150,
+    JITTER: 0.36,              // node offset from its grid point (fraction of a cell)
+    EXTRA_EDGE_KEEP: 0.5,      // share of non-spanning-tree edges kept when thinning
+    LONG_EDGE_FACTOR: 1.9,     // drop non-tree edges longer than spacing * factor
 
-    // Network Generation
-    NUM_NODES: 100,                   // Number of nodes in the network (approximate for lattice)
-    LATTICE_NOISE_FACTOR: 0.6,      // Max deviation from grid point (0 = perfect grid, 1 = up to cell center)
-    EDGES_PER_NODE_MIN: 1,          // Min random edges a node will try to create
-    EDGES_PER_NODE_MAX: 2,          // Max random edges a node will try to create
+    // --- Node drift (always kept below the computed no-crossing bound) ------
+    DRIFT_MAX_FRAC: 0.055,     // max drift radius as a fraction of node spacing
+    DRIFT_SAFETY: 0.45,        // fraction of the geometric safety margin actually used
+    DRIFT_FREQ_MIN: 0.04,      // Hz
+    DRIFT_FREQ_MAX: 0.09,
 
-    // Node Visuals
-    NODE_RADIUS: 8,
-    NODE_COLOR: 'rgba(100, 150, 255, 0.9)',
-    NODE_BORDER_COLOR: 'rgba(200, 200, 255, 1)',
-    NODE_BORDER_WIDTH: 2,
-    NODE_SHADOW_COLOR: 'rgba(0, 0, 0, 0.5)',
-    NODE_SHADOW_BLUR: 5,
-    ENABLE_NODE_SHADOWS: false, // Set to true to enable node shadows (can impact performance)
-    NODE_SELECTED_COLOR: 'rgba(255, 255, 100, 1)',
-    NODE_BREATHING_SPEED: 1000, // Divisor for 'now' in breathing effect (larger = slower)
-    NODE_BREATHING_AMPLITUDE: 1, // Pixel amplitude for breathing (added back)
+    // --- Colours -------------------------------------------------------------
+    BG_TOP: '#05070d',
+    BG_BOTTOM: '#0b1120',
+    BG_CENTER_GLOW: 'rgba(64, 105, 180, 0.07)',
+    VIGNETTE: 'rgba(0, 0, 0, 0.38)',
+    EDGE_COLOR: 'rgba(126, 160, 215, 0.16)',
+    EDGE_WIDTH: 1,
+    NODE_COLOR: [188, 214, 255],
+    NODE_ALPHA_MIN: 0.35,
+    NODE_ALPHA_MAX: 0.8,
+    NODE_RADIUS_MIN: 1.4,
+    NODE_RADIUS_MAX: 2.8,
+    HUB_DEGREE: 6,             // nodes with at least this many links get a faint halo
+    HUB_GLOW_ALPHA: 0.1,
 
-    // Node Movement & Interaction
-    NODE_ACCELERATION: 0,        // Set to 0 for static lattice
-    NODE_MAX_SPEED: 0.3,           // Max speed (if acceleration > 0)
-    NODE_DAMPING: 0.95,            // Damping factor (if acceleration > 0)
+    // --- Twinkle ---------------------------------------------------------------
+    TWINKLE_FREQ_MIN: 0.1,     // Hz
+    TWINKLE_FREQ_MAX: 0.25,
+    TWINKLE_DEPTH: 0.45,       // how much of a node's brightness oscillates
 
-    // Packet Behavior
-    PACKET_RADIUS: 3,
-    PACKET_MAX_HOPS: 3,       // Maximum redirects before removal
-    PACKET_SPEED: 0.5,        // Movement speed (progress units per second, 1 means full edge in 1s)
-    PACKET_EMIT_CHANCE: 0.1, // Chance per frame to emit a packet (Increased from 0.05)
-    PACKET_COLOR: 'rgba(255, 100, 100, 1)', // Color of packets
+    // --- Signals (packets routed along shortest paths) ---------------------------
+    SIGNAL_MAX: 3,
+    SIGNAL_SPAWN_MIN_S: 0.9,
+    SIGNAL_SPAWN_MAX_S: 2.2,
+    SIGNAL_SPEED_MIN: 120,     // px / s
+    SIGNAL_SPEED_MAX: 190,
+    SIGNAL_HOPS_MIN: 4,
+    SIGNAL_HOPS_MAX: 9,
+    SIGNAL_COLORS: ['#59d7ff', '#6fa8ff', '#9f8cff'],
+    SIGNAL_ACCENT: '#c77dff',
+    SIGNAL_ACCENT_CHANCE: 0.18,
+    EDGE_LIT_DECAY_S: 0.55,    // time constant of the fading trail
+    NODE_LIT_DECAY_S: 0.4,
 
-    // Visuals: Edges
-    EDGE_COLOR: 'rgba(60,60,60,0.9)',
-    EDGE_WIDTH: 5,
+    // --- Arrival rings ------------------------------------------------------------
+    RING_DURATION_S: 0.9,
+    RING_RADIUS_FROM: 5,
+    RING_RADIUS_TO: 30,
+    RING_ALPHA: 0.5,
 
-    // Visuals & Durations: Ripples
-    RIPPLE_DURATION_SECONDS: 0.7,
-    RIPPLE_BASE_RADIUS: 22,
-    RIPPLE_EXPANSION_RATE: 44, // How much radius increases per second
-    RIPPLE_WIDTH: 5,
-    RIPPLE_ALPHA_START: 0.5,
-    RIPPLE_TARGET_SPACING: 10,
+    // --- Dust (far parallax layer; particles only, so nothing there can cross) -----
+    DUST_AREA_PER_PARTICLE: 26000,
+    DUST_COLOR: [150, 185, 235],
+    DUST_SPEED_MIN: 2,         // px / s, slow upward drift
+    DUST_SPEED_MAX: 7,
 
-    // Visuals & Durations: Blinks (Packet Removal Effect)
-    BLINK_DURATION_SECONDS: 0.5,
-    BLINK_RADIUS: 26,
-    BLINK_COLOR: 'red',
-    BLINK_WIDTH: 8,
-    BLINK_SHADOW_BLUR: 15,
-    BLINK_ALPHA_START: 0.7,
+    // --- Pointer --------------------------------------------------------------------
+    HOVER_RADIUS: 150,
+    HOVER_NODE_BOOST: 0.6,     // extra brightness / radius for nodes near the cursor
+    PARALLAX_NEAR: 7,          // px, mesh shift when the cursor reaches a screen edge
+    PARALLAX_FAR: 2.5,         // px, dust shift (smaller = feels further away)
+    PARALLAX_EASE: 3,          // lerp speed, 1/s
 
-    // Visuals & Durations: Processing Flash (Node Rerouting Packet)
-    PROCESSING_FLASH_DURATION_SECONDS: 0.3,
-    PROCESSING_FLASH_COLOR: 'rgba(255, 255, 150, 0.7)',
-    PROCESSING_FLASH_RADIUS_FACTOR: 1.3, // Multiplier of NODE_RADIUS
-    PROCESSING_FLASH_SHADOW_BLUR: 7,
-
-    // Visuals & Durations: Node Connection Pulses
-    NODE_PULSE_DURATION_SECONDS: 0.5,    // How long the pulse effect lasts
-    NODE_PULSE_MAX_RADIUS_FACTOR: 1.8,   // Pulse expands to NodeRadius * this factor
-    NODE_PULSE_LINE_WIDTH: 3,
-    NODE_PULSE_SEND_COLOR: 'rgba(120, 255, 120, 0.7)', // Light green for sending
-    NODE_PULSE_RECEIVE_FINAL_COLOR: 'rgba(120, 120, 255, 0.7)', // Light blue for final reception
-    NODE_PULSE_ROUTE_COLOR: 'rgba(255, 180, 80, 0.8)', // Warm yellow/orange for routing
+    MAX_DPR: 2,
 };
-
-// Derived values for convenience
-config.RIPPLE_FADE_PER_SECOND = (config.RIPPLE_ALPHA_START - 0) / config.RIPPLE_DURATION_SECONDS;
-config.BLINK_ALPHA_CURVE_FACTOR = 1 / (config.BLINK_DURATION_SECONDS * config.BLINK_DURATION_SECONDS); // For quadratic fade
-config.PROCESSING_FLASH_FADE_PER_SECOND = 1 / config.PROCESSING_FLASH_DURATION_SECONDS;
-
-console.log('config.js loaded');
