@@ -90,6 +90,7 @@ function onResize() {
 }
 
 let last = 0;
+let depthPhase = false;
 
 const TAU_SWAY = Math.PI * 2 * config.SWAY_FREQ;
 const ROT_SPEED = config.ROT_SPEED_DEG_S * Math.PI / 180;
@@ -113,11 +114,15 @@ function frame(now) {
         + Math.sin(TAU_SWAY * elapsed + 0.9) * config.SWAY_AMP;
     view.offset.y = view.parallax.y * config.PARALLAX_PX
         + Math.sin(TAU_SWAY * 0.8 * elapsed + 2.3) * config.SWAY_AMP * 0.7;
-    view.rot = ROT_SPEED * elapsed;
+    view.rot = (ROT_SPEED * elapsed) % (Math.PI * 2);
 
     simMain.update(dt);
     simDepth.update(dt);
-    renderBoth();
+    // The depth canvas sits behind a 5px blur, so redrawing it every other
+    // frame is invisible and roughly halves the total fill cost.
+    depthPhase = !depthPhase;
+    if (depthPhase) renderDepth(depthCtx, simDepth, view);
+    renderMain(mainCtx, simMain, view);
 }
 
 function startLoop() {
