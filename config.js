@@ -26,11 +26,16 @@ export const config = {
     EDGE_RGB: [126, 160, 215],
     EDGE_ALPHA: 0.17,
     EDGE_WIDTH: 1,
-    NODE_COLOR: [188, 214, 255],
     NODE_ALPHA_MIN: 0.35,
     NODE_ALPHA_MAX: 0.8,
     NODE_RADIUS_MIN: 1.4,
     NODE_RADIUS_MAX: 2.8,
+    // Nodes get pastel rainbow tints: a hue gradient sweeps across the
+    // screen (so neighbours harmonise) with per-node jitter on top.
+    NODE_HUE_SPAN: 360,        // degrees of hue across the diagonal
+    NODE_HUE_JITTER: 28,
+    NODE_HUE_SAT: 0.55,
+    NODE_HUE_LIGHT: 0.8,
     HUB_DEGREE: 6,             // nodes with at least this many links get a faint halo
     HUB_GLOW_ALPHA: 0.1,
     HUB_BREATH_AMP: 0.5,       // px of slow radius breathing on hubs
@@ -48,19 +53,19 @@ export const config = {
     SHIMMER_BUCKETS: 5,        // alpha quantisation steps (keeps strokes batched)
 
     // --- Signals (packets routed along shortest paths) ---------------------------
-    SIGNAL_MAX: 4,
-    SIGNAL_SPAWN_MIN_S: 0.7,
-    SIGNAL_SPAWN_MAX_S: 1.8,
+    SIGNAL_MAX: 8,
+    SIGNAL_SPAWN_MIN_S: 0.45,
+    SIGNAL_SPAWN_MAX_S: 1.1,
     SIGNAL_SPEED_MIN: 120,     // px / s
     SIGNAL_SPEED_MAX: 190,
     SIGNAL_HOPS_MIN: 4,
     SIGNAL_HOPS_MAX: 9,
-    SIGNAL_COLORS: ['#59d7ff', '#6fa8ff', '#9f8cff'],
-    SIGNAL_ACCENT: '#c77dff',
-    SIGNAL_ACCENT_CHANCE: 0.18,
+    // Full rainbow, in hue order: each signal cycles one step per node pass.
+    SIGNAL_COLORS: ['#ff5d6c', '#ff9f43', '#ffd93d', '#6dd95f', '#34e5c2',
+        '#59d7ff', '#6fa8ff', '#a78bff', '#ff7ad9'],
     SIGNAL_LAUNCH_DELAY_S: 0.22, // charge-up pause at the source before launching
     SIGNAL_EASE: 0.6,          // 0 = linear hops, 1 = full ease-in-out per hop
-    SIGNAL_HARD_CAP: 8,        // absolute limit including cascades and click bursts
+    SIGNAL_HARD_CAP: 14,       // absolute limit including cascades and click bursts
     CASCADE_CHANCE: 0.35,      // chance an arrival relays a follow-up signal
     CASCADE_MAX_GEN: 2,
     EDGE_LIT_DECAY_S: 0.55,    // time constant of the fading trail
@@ -84,18 +89,31 @@ export const config = {
     DUST_SPEED_MIN: 2,         // px / s, slow upward drift
     DUST_SPEED_MAX: 7,
 
-    // --- Bokeh (large soft out-of-focus discs) ---------------------------------------
-    BOKEH_AREA_PER: 200000,
+    // --- Bokeh (large soft out-of-focus discs, pastel rainbow) -----------------------
+    BOKEH_AREA_PER: 100000,
+    BOKEH_COLORS: ['#ff8fa3', '#ffc46b', '#ffe66b', '#7fe08a', '#5fe3c4',
+        '#66c9ff', '#8aa8ff', '#c39bff', '#ff9ae0'],
     BOKEH_R_MIN: 9,
     BOKEH_R_MAX: 26,
     BOKEH_ALPHA_MIN: 0.04,
     BOKEH_ALPHA_MAX: 0.1,
     BOKEH_DRIFT: 2,            // max wander speed, px/s
-    FG_BOKEH_COUNT: 4,         // big foreground discs on the main canvas
+    FG_BOKEH_COUNT: 8,         // big foreground discs on the main canvas
     FG_BOKEH_R_MIN: 16,
     FG_BOKEH_R_MAX: 36,
     FG_BOKEH_ALPHA_MIN: 0.04,
     FG_BOKEH_ALPHA_MAX: 0.08,
+
+    // --- Stars: very subtle particles flying slowly towards the viewer ----------------
+    STAR_AREA_PER: 160000,     // one star per this many px^2 (capped in code)
+    STAR_MAX: 24,
+    STAR_SPEED_MIN: 0.012,     // depth units per second (a crossing takes ~40 s)
+    STAR_SPEED_MAX: 0.03,
+    STAR_R_MIN: 0.5,
+    STAR_R_MAX: 1.1,
+    STAR_ALPHA_MIN: 0.08,
+    STAR_ALPHA_MAX: 0.2,
+    STAR_COLORS: ['#cfe4ff', '#eaf6ff', '#ffd9e8', '#d9ffe3', '#fff3c4'],
 
     // --- Depth layer (second mesh on a blurred canvas behind the main one) -----------
     DEPTH_SPACING_SCALE: 0.55, // denser, smaller cells: reads as further away
@@ -104,25 +122,24 @@ export const config = {
     DEPTH_EDGE_ALPHA: 0.14,
     DEPTH_NODE_SCALE: 0.8,
     DEPTH_NODE_ALPHA: 0.75,
-    DEPTH_SIGNAL_MAX: 2,
-    DEPTH_SPAWN_MIN_S: 2,
-    DEPTH_SPAWN_MAX_S: 4.5,
+    DEPTH_SIGNAL_MAX: 4,
+    DEPTH_SPAWN_MIN_S: 1.4,
+    DEPTH_SPAWN_MAX_S: 3,
     DEPTH_SPEED_SCALE: 0.55,
     DEPTH_RING_SCALE: 0.6,
 
-    // --- Camera: pointer parallax + autonomous sway and rotation ----------------------
+    // --- Camera: pointer parallax + sway + continuous slow rotation -------------------
     PARALLAX_PX: 8,            // px of shift when the cursor reaches a screen edge
     PARALLAX_EASE: 3,          // lerp speed, 1/s
     SWAY_AMP: 5,               // px of slow always-on camera sway
     SWAY_FREQ: 0.022,          // Hz
-    ROT_AMP_DEG: 2,            // slow rocking rotation amplitude (degrees)
-    ROT_FREQ: 0.016,           // Hz; keep amplitudes small (mesh padding covers ~6 deg)
+    ROT_SPEED_DEG_S: 0.75,     // continuous rotation; one revolution in ~8 minutes
     OFFSET_DUST: 0.25,         // per-layer multipliers of the camera offset
     OFFSET_DEPTH: 0.4,
     OFFSET_MAIN: 1,
     OFFSET_FG: 1.6,
     ROT_MAIN: 1,               // per-layer multipliers of the camera rotation
-    ROT_DEPTH: -1.6,           // opposite direction enhances the depth illusion
+    ROT_DEPTH: -0.6,           // counter-rotation enhances the depth illusion
 
     // --- Pointer --------------------------------------------------------------------
     HOVER_RADIUS: 150,

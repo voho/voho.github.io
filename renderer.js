@@ -117,13 +117,37 @@ function drawDust(ctx, dust, time, view) {
 
 function drawBokeh(ctx, items, time, view, offsetFactor, rotFactor) {
     if (items.length === 0) return;
-    const disc = haloSprite('#9fc1ff');
     ctx.save();
     applyCamera(ctx, view, offsetFactor, rotFactor);
     ctx.globalCompositeOperation = 'lighter';
     for (const f of items) {
         ctx.globalAlpha = f.alpha * (0.75 + 0.25 * Math.sin(f.tw * time + f.twPhase));
-        ctx.drawImage(disc, f.x - f.r, f.y - f.r, f.r * 2, f.r * 2);
+        ctx.drawImage(haloSprite(f.color || '#9fc1ff'),
+            f.x - f.r, f.y - f.r, f.r * 2, f.r * 2);
+    }
+    ctx.restore();
+}
+
+// Subtle particles flying slowly towards the viewer: simple perspective
+// projection, so they grow and drift outward as they approach.
+function drawStars(ctx, stars, view) {
+    if (stars.length === 0) return;
+    const cx = view.w / 2, cy = view.h / 2;
+    const f = Math.min(view.w, view.h) * 0.5;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const s of stars) {
+        const z = Math.max(0.05, s.z);
+        const x = cx + s.ux * f / z;
+        const y = cy + s.uy * f / z;
+        // Fade in when far away, fade out as they get close.
+        const fade = Math.min(1, (1 - s.z) * 6) * Math.min(1, (s.z - 0.1) * 4);
+        if (fade <= 0) continue;
+        ctx.globalAlpha = s.alpha * fade;
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(x, y, s.r / z * 0.6, 0, TAU);
+        ctx.fill();
     }
     ctx.restore();
 }
@@ -177,7 +201,6 @@ function drawMesh(ctx, sim, view, o) {
         : null;
     const pointerStrength = o.hover ? view.pointer.strength : 0;
     const hoverR = config.HOVER_RADIUS;
-    ctx.fillStyle = rgba(config.NODE_COLOR, 1);
     for (const n of net.nodes) {
         const twinkle = 1 - config.TWINKLE_DEPTH * (0.5 + 0.5 * Math.sin(n.tw * time + n.twPhase));
         let alpha = n.alpha * twinkle * o.nodeAlpha;
@@ -199,6 +222,7 @@ function drawMesh(ctx, sim, view, o) {
         }
         n.hover = hover;
         ctx.globalAlpha = Math.min(1, alpha + n.lit * 0.6);
+        ctx.fillStyle = n.colorStr;
         ctx.beginPath();
         ctx.arc(n.x, n.y, Math.max(0.4, radius + n.lit * 0.8), 0, TAU);
         ctx.fill();
@@ -346,6 +370,7 @@ export function renderMain(ctx, sim, view) {
     });
 
     drawBokeh(ctx, sim.fgBokeh, sim.time, view, config.OFFSET_FG, config.ROT_MAIN);
+    drawStars(ctx, sim.stars, view);
 
     // Soft vignette keeps the corners calm and the centre readable.
     ctx.fillStyle = gradients(ctx, w, h).vig;
