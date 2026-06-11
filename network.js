@@ -1,8 +1,8 @@
 // network.js
 // Builds the background graphs and runs the simulation state.
 //
-// Layout: nodes sit on a jittered grid (padded well past the viewport so the
-// mesh survives camera sway and rotation), connected by a Delaunay
+// Layout: nodes sit on a jittered grid (padded and cropped to cover the
+// full rotation circle of the viewport), connected by a Delaunay
 // triangulation that is thinned to a lighter web. Delaunay triangulations
 // are planar, and removing edges keeps them planar, so a mesh can never
 // contain crossing lines. A spanning tree is always kept whole, so every
@@ -32,8 +32,20 @@ function pointSegDist(px, py, ax, ay, bx, by) {
     return Math.sqrt(dx * dx + dy * dy);
 }
 
-// --- Delaunay triangulation (Bowyer-Watson) ---------------------------------
+function hslToRgb(h, s, l) {
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => {
+        const k = (n + h / 30) % 12;
+        return l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+    };
+    return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+
+// --- Delaunay triangulation (Bowyer-Watson with a y-sweep) --------------------
 // Returns the unique edges [i, j] of the triangulation of the given points.
+// Points are inserted bottom-up; triangles whose circumcircle lies entirely
+// below the sweep line can never be invalidated again and are retired from
+// the search set, which keeps large builds fast.
 
 const EDGE_KEY_BASE = 1 << 20; // supports up to ~a million vertices
 
@@ -65,21 +77,36 @@ function delaunayEdges(points) {
     const circumcircle = (a, b, c) => {
         const ax = vx[a], ay = vy[a], bx = vx[b], by = vy[b], cx = vx[c], cy = vy[c];
         const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-        if (Math.abs(d) < 1e-12) return { x: 0, y: 0, r2: Infinity };
+        if (Math.abs(d) < 1e-12) return { x: 0, y: 0, r2: Infinity, r: Infinity };
         const a2 = ax * ax + ay * ay, b2 = bx * bx + by * by, c2 = cx * cx + cy * cy;
         const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
         const uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
         const dx = ux - ax, dy = uy - ay;
-        return { x: ux, y: uy, r2: dx * dx + dy * dy };
+        const r2 = dx * dx + dy * dy;
+        return { x: ux, y: uy, r2, r: Math.sqrt(r2) };
     };
 
-    let triangles = [{ a: n, b: n + 1, c: n + 2, cc: circumcircle(n, n + 1, n + 2) }];
+    const order = Array.from({ length: n }, (_, i) => i)
+        .sort((a, b) => vy[a] - vy[b]);
 
-    for (let i = 0; i < n; i++) {
+    const finished = [];
+    let active = [{ a: n, b: n + 1, c: n + 2, cc: circumcircle(n, n + 1, n + 2) }];
+
+    for (const i of order) {
         const px = vx[i], py = vy[i];
+
+        // Retire triangles the sweep has passed: every remaining point has
+        // y >= py, so a circumcircle entirely below py stays empty forever.
+        const stillActive = [];
+        for (const t of active) {
+            if (t.cc.y + t.cc.r < py - 1e-9) finished.push(t);
+            else stillActive.push(t);
+        }
+        active = stillActive;
+
         const bad = [];
         const kept = [];
-        for (const t of triangles) {
+        for (const t of active) {
             const dx = px - t.cc.x, dy = py - t.cc.y;
             if (dx * dx + dy * dy <= t.cc.r2) bad.push(t);
             else kept.push(t);
@@ -95,16 +122,16 @@ function delaunayEdges(points) {
             addEdge(t.b, t.c);
             addEdge(t.c, t.a);
         }
-        triangles = kept;
+        active = kept;
         for (const [key, count] of counts) {
             if (count !== 1) continue;
             const u = Math.floor(key / EDGE_KEY_BASE), v = key % EDGE_KEY_BASE;
-            triangles.push({ a: u, b: v, c: i, cc: circumcircle(u, v, i) });
+            active.push({ a: u, b: v, c: i, cc: circumcircle(u, v, i) });
         }
     }
 
     const edgeSet = new Set();
-    for (const t of triangles) {
+    for (const t of finished.concat(active)) {
         if (t.a >= n || t.b >= n || t.c >= n) continue; // touches the super-triangle
         for (const [u, v] of [[t.a, t.b], [t.b, t.c], [t.c, t.a]]) {
             edgeSet.add(u < v ? u * EDGE_KEY_BASE + v : v * EDGE_KEY_BASE + u);
@@ -139,7 +166,8 @@ class DSU {
 
 // --- Network construction -------------------------------------------------------
 
-export function buildNetwork(width, height, spacingScale = 1, pad = 0) {
+export function buildNetwork(width, height, spacingScale = 1, padX = 0, padY = 0,
+    cropRadius = 0) {
     const area = Math.max(1, width * height);
     const spacing = Math.min(config.SPACING_MAX,
         Math.max(config.SPACING_MIN, Math.sqrt(area / config.SPACING_AREA_DIVISOR)))
@@ -152,17 +180,30 @@ export function buildNetwork(width, height, spacingScale = 1, pad = 0) {
 
     // Margin rings outside the viewport: one always, plus enough cells to
     // cover the requested padding (camera sway, parallax and rotation).
-    const mC = 1 + Math.ceil(pad / cellW);
-    const mR = 1 + Math.ceil(pad / cellH);
+    const mC = 1 + Math.ceil(padX / cellW);
+    const mR = 1 + Math.ceil(padY / cellH);
+
+    // For continuously rotating layers the padding spans the viewport's
+    // circumcircle; cropping the grid corners back to that circle keeps the
+    // node count (and build time) down without losing coverage.
+    const crop = cropRadius > 0 ? cropRadius + Math.hypot(cellW, cellH) : Infinity;
+    const cx = width / 2, cy = height / 2;
+    const diag = Math.hypot(width, height);
 
     const nodes = [];
     for (let r = -mR; r < rows + mR; r++) {
         for (let c = -mC; c < cols + mC; c++) {
             const x = (c + 0.5) * cellW + rand(-1, 1) * cellW * config.JITTER;
             const y = (r + 0.5) * cellH + rand(-1, 1) * cellH * config.JITTER;
+            if (Math.hypot(x - cx, y - cy) > crop) continue;
+            // Pastel rainbow tint: hue sweeps across the diagonal.
+            const hue = ((x + y) / (2 * diag) * config.NODE_HUE_SPAN
+                + rand(-config.NODE_HUE_JITTER, config.NODE_HUE_JITTER) + 720) % 360;
+            const rgb = hslToRgb(hue, config.NODE_HUE_SAT, config.NODE_HUE_LIGHT);
             nodes.push({
                 x, y,           // current (drifted) position
                 hx: x, hy: y,   // home position
+                colorStr: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
                 r: rand(config.NODE_RADIUS_MIN, config.NODE_RADIUS_MAX),
                 alpha: rand(config.NODE_ALPHA_MIN, config.NODE_ALPHA_MAX),
                 tw: rand(config.TWINKLE_FREQ_MIN, config.TWINKLE_FREQ_MAX) * TAU,
@@ -245,6 +286,7 @@ function makeFloaters(count, width, height, rMin, rMax, aMin, aMax, mode) {
             y: rand(-40, height + 40),
             r: rand(rMin, rMax),
             alpha: rand(aMin, aMax),
+            color: upward ? null : pick(config.BOKEH_COLORS),
             vx: upward ? 0 : rand(-config.BOKEH_DRIFT, config.BOKEH_DRIFT),
             vy: upward
                 ? -rand(config.DUST_SPEED_MIN, config.DUST_SPEED_MAX)
@@ -268,6 +310,41 @@ function updateFloaters(items, dt, width, height) {
     }
 }
 
+// --- Stars: subtle particles flying slowly towards the viewer ----------------------
+
+function resetStar(s) {
+    s.ux = rand(-1, 1);
+    s.uy = rand(-1, 1);
+    s.z = rand(0.85, 1);
+    s.speed = rand(config.STAR_SPEED_MIN, config.STAR_SPEED_MAX);
+    s.r = rand(config.STAR_R_MIN, config.STAR_R_MAX);
+    s.alpha = rand(config.STAR_ALPHA_MIN, config.STAR_ALPHA_MAX);
+    s.color = pick(config.STAR_COLORS);
+}
+
+function makeStars(width, height) {
+    const count = Math.min(config.STAR_MAX,
+        Math.max(7, Math.round(width * height / config.STAR_AREA_PER)));
+    const stars = [];
+    for (let i = 0; i < count; i++) {
+        const s = {};
+        resetStar(s);
+        s.z = rand(0.2, 1); // initial population spread through the whole depth
+        stars.push(s);
+    }
+    return stars;
+}
+
+function updateStars(stars, dt, width, height) {
+    for (const s of stars) {
+        s.z -= s.speed * dt;
+        const f = Math.min(width, height) * 0.5;
+        const sx = Math.abs(s.ux) * f / Math.max(0.05, s.z);
+        const sy = Math.abs(s.uy) * f / Math.max(0.05, s.z);
+        if (s.z < 0.12 || sx > width * 0.75 || sy > height * 0.75) resetStar(s);
+    }
+}
+
 // --- Simulation -------------------------------------------------------------------
 
 export class Simulation {
@@ -282,19 +359,26 @@ export class Simulation {
             dust: false,
             bokeh: false,
             fgBokeh: false,
+            stars: false,
         }, opts);
         this.time = 0;
         this.rebuild(width, height);
     }
 
     rebuild(width, height) {
-        // Padding so the mesh still covers the screen at the extremes of
-        // parallax, sway and this layer's rotation.
-        const maxRot = Math.abs(this.opts.rotFactor) * config.ROT_AMP_DEG * Math.PI / 180;
-        const pad = Math.hypot(width, height) / 2 * Math.sin(maxRot)
-            + config.PARALLAX_PX + config.SWAY_AMP + 30;
+        // Continuously rotating layers must cover the viewport's full
+        // rotation circle; static layers only need sway/parallax headroom.
+        const slack = config.PARALLAX_PX + config.SWAY_AMP + 30;
+        const R = Math.hypot(width, height) / 2;
+        let padX = slack, padY = slack, cropRadius = 0;
+        if (this.opts.rotFactor !== 0) {
+            padX = R - width / 2 + slack;
+            padY = R - height / 2 + slack;
+            cropRadius = R + slack;
+        }
 
-        this.net = buildNetwork(width, height, this.opts.spacingScale, pad);
+        this.net = buildNetwork(width, height, this.opts.spacingScale,
+            padX, padY, cropRadius);
         this.signals = [];
         this.rings = [];
         this.sparks = [];
@@ -314,6 +398,7 @@ export class Simulation {
                 config.FG_BOKEH_R_MIN, config.FG_BOKEH_R_MAX,
                 config.FG_BOKEH_ALPHA_MIN, config.FG_BOKEH_ALPHA_MAX, 'bokeh')
             : [];
+        this.stars = this.opts.stars ? makeStars(width, height) : [];
     }
 
     update(dt) {
@@ -355,11 +440,12 @@ export class Simulation {
         updateFloaters(this.dust, dt, net.width, net.height);
         updateFloaters(this.bokeh, dt, net.width, net.height);
         updateFloaters(this.fgBokeh, dt, net.width, net.height);
+        updateStars(this.stars, dt, net.width, net.height);
     }
 
     // Routes a packet along the shortest path from a source to a target a few
     // hops away. With no arguments it picks a random visible source.
-    _spawnSignal(forcedFrom = null, gen = 0, inheritColor = null) {
+    _spawnSignal(forcedFrom = null, gen = 0, inheritColorIdx = null) {
         const net = this.net;
         if (this.signals.length >= config.SIGNAL_HARD_CAP) return false;
 
@@ -423,9 +509,11 @@ export class Simulation {
             edgeIdx.push(net.adj[path[i]].find(l => l.n === path[i + 1]).e);
         }
 
-        const color = inheritColor || (Math.random() < config.SIGNAL_ACCENT_CHANCE
-            ? config.SIGNAL_ACCENT
-            : pick(config.SIGNAL_COLORS));
+        // Signals cycle through the rainbow palette, one step per node pass;
+        // cascades continue the parent's sequence.
+        const colorIdx = inheritColorIdx !== null
+            ? inheritColorIdx
+            : Math.floor(Math.random() * config.SIGNAL_COLORS.length);
 
         this.signals.push({
             path,
@@ -435,7 +523,8 @@ export class Simulation {
             wait: config.SIGNAL_LAUNCH_DELAY_S,  // charge-up pause before launch
             speed: rand(config.SIGNAL_SPEED_MIN, config.SIGNAL_SPEED_MAX)
                 * this.opts.speedScale,
-            color,
+            colorIdx,
+            color: config.SIGNAL_COLORS[colorIdx],
             gen,
             done: false,
         });
@@ -463,8 +552,11 @@ export class Simulation {
                 s.t = 0;
                 const edge = net.edges[s.edgeIdx[s.leg]];
                 edge.lit = 1;
-                edge.color = s.color;
+                edge.color = s.color; // the trail keeps the colour it was travelled with
                 net.nodes[s.path[s.leg + 1]].lit = 1;
+                // The flare takes the next rainbow colour at every node pass.
+                s.colorIdx = (s.colorIdx + 1) % config.SIGNAL_COLORS.length;
+                s.color = config.SIGNAL_COLORS[s.colorIdx];
                 s.leg++;
                 if (s.leg >= s.edgeIdx.length) {
                     s.done = true;
@@ -477,10 +569,11 @@ export class Simulation {
 
     _arrive(node, nodeIdx, signal) {
         this._popAt(node, signal.color);
-        // Sometimes the arrival relays a fresh signal onward: a small cascade.
+        // Sometimes the arrival relays a fresh signal onward: a small cascade
+        // that continues the rainbow sequence.
         if (signal.gen < config.CASCADE_MAX_GEN
             && Math.random() < config.CASCADE_CHANCE) {
-            this._spawnSignal(nodeIdx, signal.gen + 1, signal.color);
+            this._spawnSignal(nodeIdx, signal.gen + 1, signal.colorIdx);
         }
     }
 
@@ -499,6 +592,13 @@ export class Simulation {
                 t: 0,
                 color,
             });
+        }
+    }
+
+    // Fires a few flares from random visible nodes (used on button hover).
+    fireFlares(count) {
+        for (let i = 0; i < count; i++) {
+            this._spawnSignal(null, 1);
         }
     }
 

@@ -57,6 +57,7 @@ function rebuild() {
         simMain = new Simulation(view.w, view.h, {
             rotFactor: config.ROT_MAIN,
             fgBokeh: true,
+            stars: true,
         });
         simDepth = new Simulation(view.w, view.h, {
             spacingScale: config.DEPTH_SPACING_SCALE,
@@ -87,8 +88,7 @@ function onResize() {
 let last = 0;
 
 const TAU_SWAY = Math.PI * 2 * config.SWAY_FREQ;
-const TAU_ROT = Math.PI * 2 * config.ROT_FREQ;
-const ROT_AMP = config.ROT_AMP_DEG * Math.PI / 180;
+const ROT_SPEED = config.ROT_SPEED_DEG_S * Math.PI / 180;
 
 function frame(now) {
     rafId = requestAnimationFrame(frame);
@@ -104,13 +104,12 @@ function frame(now) {
     view.parallax.y += (view.parallax.ty - view.parallax.y) * parallaxEase;
 
     // Camera: eased pointer parallax plus a slow autonomous sway and a
-    // gentle rocking rotation, so the scene keeps moving on its own.
+    // continuous slow rotation, so the scene keeps moving on its own.
     view.offset.x = view.parallax.x * config.PARALLAX_PX
         + Math.sin(TAU_SWAY * elapsed + 0.9) * config.SWAY_AMP;
     view.offset.y = view.parallax.y * config.PARALLAX_PX
         + Math.sin(TAU_SWAY * 0.8 * elapsed + 2.3) * config.SWAY_AMP * 0.7;
-    view.rot = ROT_AMP * (0.7 * Math.sin(TAU_ROT * elapsed)
-        + 0.3 * Math.sin(TAU_ROT * 0.37 * elapsed + 1.7));
+    view.rot = ROT_SPEED * elapsed;
 
     simMain.update(dt);
     simDepth.update(dt);
@@ -149,6 +148,21 @@ window.addEventListener('pointerdown', (ev) => {
         ev.clientX, ev.clientY);
     simMain.burstAt(p.x, p.y);
 }, { passive: true });
+
+// Hovering (or keyboard-focusing) any button fires flares from random
+// nodes, at most once every three seconds.
+let lastButtonFlares = -Infinity;
+const fireButtonFlares = () => {
+    if (reducedMotion.matches || !simMain) return;
+    const now = performance.now();
+    if (now - lastButtonFlares < 3000) return;
+    lastButtonFlares = now;
+    simMain.fireFlares(5);
+};
+for (const button of document.querySelectorAll('.button')) {
+    button.addEventListener('pointerenter', fireButtonFlares);
+    button.addEventListener('focus', fireButtonFlares);
+}
 
 const resetPointer = () => {
     view.pointer.targetStrength = 0;
