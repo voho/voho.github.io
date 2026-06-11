@@ -239,19 +239,19 @@ function drawMesh(ctx, sim, view, o) {
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = hexToRgba(e.color, 0.15 * e.lit);
+        ctx.strokeStyle = hexToRgba(e.color, 0.15 * e.lit * o.litScale);
         ctx.lineWidth = 3.4;
         ctx.stroke();
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = hexToRgba(e.color, 0.7 * e.lit);
+        ctx.strokeStyle = hexToRgba(e.color, 0.7 * e.lit * o.litScale);
         ctx.lineWidth = 1.4;
         ctx.stroke();
     }
 
     // Node halos: hubs, recently routed nodes and nodes near the pointer.
-    const halo = haloSprite('#7fb4ff');
+    const halo = haloSprite(o.haloColor);
     for (const n of net.nodes) {
         const strength = Math.max(
             n.deg >= config.HUB_DEGREE ? config.HUB_GLOW_ALPHA : 0,
@@ -283,7 +283,7 @@ function drawMesh(ctx, sim, view, o) {
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(hx, hy);
-        ctx.strokeStyle = hexToRgba(s.color, 0.7);
+        ctx.strokeStyle = hexToRgba(s.color, 0.7 * o.litScale);
         ctx.lineWidth = 1.4;
         ctx.stroke();
         const hs = 28 * o.nodeScale;
@@ -350,6 +350,8 @@ export function renderDepth(ctx, sim, view) {
         nodeScale: config.DEPTH_NODE_SCALE,
         hover: false,
         ringScale: config.DEPTH_RING_SCALE,
+        haloColor: config.DEPTH_HALO_COLOR,
+        litScale: config.DEPTH_LIT_SCALE,
     });
 }
 
@@ -367,6 +369,8 @@ export function renderMain(ctx, sim, view) {
         nodeScale: 1,
         hover: true,
         ringScale: 1,
+        haloColor: config.HALO_COLOR,
+        litScale: 1,
     });
 
     drawBokeh(ctx, sim.fgBokeh, sim.time, view, config.OFFSET_FG, config.ROT_MAIN);

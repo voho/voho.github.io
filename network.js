@@ -167,7 +167,7 @@ class DSU {
 // --- Network construction -------------------------------------------------------
 
 export function buildNetwork(width, height, spacingScale = 1, padX = 0, padY = 0,
-    cropRadius = 0) {
+    cropRadius = 0, mono = false) {
     const area = Math.max(1, width * height);
     const spacing = Math.min(config.SPACING_MAX,
         Math.max(config.SPACING_MIN, Math.sqrt(area / config.SPACING_AREA_DIVISOR)))
@@ -196,10 +196,13 @@ export function buildNetwork(width, height, spacingScale = 1, padX = 0, padY = 0
             const x = (c + 0.5) * cellW + rand(-1, 1) * cellW * config.JITTER;
             const y = (r + 0.5) * cellH + rand(-1, 1) * cellH * config.JITTER;
             if (Math.hypot(x - cx, y - cy) > crop) continue;
-            // Pastel rainbow tint: hue sweeps across the diagonal.
+            // Pastel rainbow tint (hue sweeps across the diagonal), or a
+            // near-white grey for monochrome layers.
             const hue = ((x + y) / (2 * diag) * config.NODE_HUE_SPAN
                 + rand(-config.NODE_HUE_JITTER, config.NODE_HUE_JITTER) + 720) % 360;
-            const rgb = hslToRgb(hue, config.NODE_HUE_SAT, config.NODE_HUE_LIGHT);
+            const rgb = mono
+                ? hslToRgb(225, 0.05, rand(0.78, 0.92))
+                : hslToRgb(hue, config.NODE_HUE_SAT, config.NODE_HUE_LIGHT);
             nodes.push({
                 x, y,           // current (drifted) position
                 hx: x, hy: y,   // home position
@@ -277,7 +280,8 @@ export function buildNetwork(width, height, spacingScale = 1, padX = 0, padY = 0
 
 // --- Floating particles (dust and bokeh) ------------------------------------------
 
-function makeFloaters(count, width, height, rMin, rMax, aMin, aMax, mode) {
+function makeFloaters(count, width, height, rMin, rMax, aMin, aMax, mode,
+    colors = config.BOKEH_COLORS) {
     const items = [];
     for (let i = 0; i < count; i++) {
         const upward = mode === 'dust';
@@ -286,7 +290,7 @@ function makeFloaters(count, width, height, rMin, rMax, aMin, aMax, mode) {
             y: rand(-40, height + 40),
             r: rand(rMin, rMax),
             alpha: rand(aMin, aMax),
-            color: upward ? null : pick(config.BOKEH_COLORS),
+            color: upward ? null : pick(colors),
             vx: upward ? 0 : rand(-config.BOKEH_DRIFT, config.BOKEH_DRIFT),
             vy: upward
                 ? -rand(config.DUST_SPEED_MIN, config.DUST_SPEED_MAX)
@@ -356,6 +360,10 @@ export class Simulation {
             spawnMin: config.SIGNAL_SPAWN_MIN_S,
             spawnMax: config.SIGNAL_SPAWN_MAX_S,
             speedScale: 1,
+            mono: false,
+            palette: config.SIGNAL_COLORS,
+            bokehColors: config.BOKEH_COLORS,
+            bokehAlphaScale: 1,
             dust: false,
             bokeh: false,
             fgBokeh: false,
@@ -378,7 +386,7 @@ export class Simulation {
         }
 
         this.net = buildNetwork(width, height, this.opts.spacingScale,
-            padX, padY, cropRadius);
+            padX, padY, cropRadius, this.opts.mono);
         this.signals = [];
         this.rings = [];
         this.sparks = [];
@@ -391,7 +399,9 @@ export class Simulation {
         this.bokeh = this.opts.bokeh
             ? makeFloaters(Math.max(3, Math.round(width * height / config.BOKEH_AREA_PER)),
                 width, height, config.BOKEH_R_MIN, config.BOKEH_R_MAX,
-                config.BOKEH_ALPHA_MIN, config.BOKEH_ALPHA_MAX, 'bokeh')
+                config.BOKEH_ALPHA_MIN * this.opts.bokehAlphaScale,
+                config.BOKEH_ALPHA_MAX * this.opts.bokehAlphaScale,
+                'bokeh', this.opts.bokehColors)
             : [];
         this.fgBokeh = this.opts.fgBokeh
             ? makeFloaters(config.FG_BOKEH_COUNT, width, height,
@@ -509,11 +519,12 @@ export class Simulation {
             edgeIdx.push(net.adj[path[i]].find(l => l.n === path[i + 1]).e);
         }
 
-        // Signals cycle through the rainbow palette, one step per node pass;
+        // Signals cycle through this layer's palette, one step per node pass;
         // cascades continue the parent's sequence.
+        const palette = this.opts.palette;
         const colorIdx = inheritColorIdx !== null
             ? inheritColorIdx
-            : Math.floor(Math.random() * config.SIGNAL_COLORS.length);
+            : Math.floor(Math.random() * palette.length);
 
         this.signals.push({
             path,
@@ -524,7 +535,7 @@ export class Simulation {
             speed: rand(config.SIGNAL_SPEED_MIN, config.SIGNAL_SPEED_MAX)
                 * this.opts.speedScale,
             colorIdx,
-            color: config.SIGNAL_COLORS[colorIdx],
+            color: palette[colorIdx % palette.length],
             gen,
             done: false,
         });
@@ -554,9 +565,9 @@ export class Simulation {
                 edge.lit = 1;
                 edge.color = s.color; // the trail keeps the colour it was travelled with
                 net.nodes[s.path[s.leg + 1]].lit = 1;
-                // The flare takes the next rainbow colour at every node pass.
-                s.colorIdx = (s.colorIdx + 1) % config.SIGNAL_COLORS.length;
-                s.color = config.SIGNAL_COLORS[s.colorIdx];
+                // The flare takes the next palette colour at every node pass.
+                s.colorIdx = (s.colorIdx + 1) % this.opts.palette.length;
+                s.color = this.opts.palette[s.colorIdx];
                 s.leg++;
                 if (s.leg >= s.edgeIdx.length) {
                     s.done = true;
@@ -616,7 +627,7 @@ export class Simulation {
         if (best < 0) return false;
         const node = net.nodes[best];
         node.lit = 1;
-        this._popAt(node, pick(config.SIGNAL_COLORS));
+        this._popAt(node, pick(this.opts.palette));
         for (let i = 0; i < config.CLICK_BURST; i++) {
             this._spawnSignal(best, 1);
         }

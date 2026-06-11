@@ -38,6 +38,7 @@ export const config = {
     NODE_HUE_LIGHT: 0.8,
     HUB_DEGREE: 6,             // nodes with at least this many links get a faint halo
     HUB_GLOW_ALPHA: 0.1,
+    HALO_COLOR: '#7fb4ff',
     HUB_BREATH_AMP: 0.5,       // px of slow radius breathing on hubs
     HUB_BREATH_FREQ: 0.18,     // Hz
 
@@ -83,9 +84,9 @@ export const config = {
     SPARK_DECEL: 3.5,          // 1/s velocity decay
     SPARK_DURATION_S: 0.55,
 
-    // --- Dust (tiny far particles) --------------------------------------------------
+    // --- Dust (tiny far particles, neutral grey) -------------------------------------
     DUST_AREA_PER_PARTICLE: 26000,
-    DUST_COLOR: [150, 185, 235],
+    DUST_COLOR: [185, 192, 204],
     DUST_SPEED_MIN: 2,         // px / s, slow upward drift
     DUST_SPEED_MAX: 7,
 
@@ -115,13 +116,18 @@ export const config = {
     STAR_ALPHA_MAX: 0.2,
     STAR_COLORS: ['#cfe4ff', '#eaf6ff', '#ffd9e8', '#d9ffe3', '#fff3c4'],
 
-    // --- Depth layer (second mesh on a blurred canvas behind the main one) -----------
+    // --- Depth layer (blurred canvas behind the main one; monochrome & faint) --------
     DEPTH_SPACING_SCALE: 0.55, // denser, smaller cells: reads as further away
     DEPTH_RES_SCALE: 0.66,     // internal resolution of the depth canvas
-    DEPTH_EDGE_RGB: [110, 148, 205],
-    DEPTH_EDGE_ALPHA: 0.14,
+    DEPTH_EDGE_RGB: [205, 210, 220],
+    DEPTH_EDGE_ALPHA: 0.09,
     DEPTH_NODE_SCALE: 0.8,
-    DEPTH_NODE_ALPHA: 0.75,
+    DEPTH_NODE_ALPHA: 0.5,
+    DEPTH_SIGNAL_COLORS: ['#eef1f6', '#c9cfd9', '#ffffff'], // greys only
+    DEPTH_BOKEH_COLORS: ['#e8ecf2', '#ffffff', '#c5cad2'],
+    DEPTH_BOKEH_ALPHA_SCALE: 0.7,
+    DEPTH_HALO_COLOR: '#dfe5ee',
+    DEPTH_LIT_SCALE: 0.55,     // trail brightness multiplier for the back layer
     DEPTH_SIGNAL_MAX: 4,
     DEPTH_SPAWN_MIN_S: 1.4,
     DEPTH_SPAWN_MAX_S: 3,

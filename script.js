@@ -66,6 +66,10 @@ function rebuild() {
             spawnMin: config.DEPTH_SPAWN_MIN_S,
             spawnMax: config.DEPTH_SPAWN_MAX_S,
             speedScale: config.DEPTH_SPEED_SCALE,
+            mono: true,
+            palette: config.DEPTH_SIGNAL_COLORS,
+            bokehColors: config.DEPTH_BOKEH_COLORS,
+            bokehAlphaScale: config.DEPTH_BOKEH_ALPHA_SCALE,
             dust: true,
             bokeh: true,
         });
