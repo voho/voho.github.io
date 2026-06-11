@@ -340,12 +340,21 @@ function makeStars(width, height) {
 }
 
 function updateStars(stars, dt, width, height) {
+    const cx = width / 2, cy = height / 2;
+    const focal = Math.min(width, height) * 0.5;
     for (const s of stars) {
         s.z -= s.speed * dt;
-        const f = Math.min(width, height) * 0.5;
-        const sx = Math.abs(s.ux) * f / Math.max(0.05, s.z);
-        const sy = Math.abs(s.uy) * f / Math.max(0.05, s.z);
-        if (s.z < 0.12 || sx > width * 0.75 || sy > height * 0.75) resetStar(s);
+        const z = Math.max(0.05, s.z);
+        s.sx = cx + s.ux * focal / z;
+        s.sy = cy + s.uy * focal / z;
+        s.size = s.r / z * 0.6;
+        // Fade in when far away, fade out as they get close.
+        s.fade = Math.min(1, (1 - s.z) * 6) * Math.min(1, (s.z - 0.1) * 4);
+        if (s.z < 0.12 || Math.abs(s.sx - cx) > width * 0.75
+            || Math.abs(s.sy - cy) > height * 0.75) {
+            resetStar(s);
+            s.fade = 0; // projected fresh on the next update
+        }
     }
 }
 
@@ -409,6 +418,7 @@ export class Simulation {
                 config.FG_BOKEH_ALPHA_MIN, config.FG_BOKEH_ALPHA_MAX, 'bokeh')
             : [];
         this.stars = this.opts.stars ? makeStars(width, height) : [];
+        updateStars(this.stars, 0, width, height); // project initial positions
     }
 
     update(dt) {
@@ -459,15 +469,16 @@ export class Simulation {
         const net = this.net;
         if (this.signals.length >= config.SIGNAL_HARD_CAP) return false;
 
+        const onScreen = (i) => {
+            const n = net.nodes[i];
+            return n.hx >= 0 && n.hx <= net.width && n.hy >= 0 && n.hy <= net.height;
+        };
+
         let from = forcedFrom;
         if (from === null) {
             const visible = [];
             for (let i = 0; i < net.nodes.length; i++) {
-                const n = net.nodes[i];
-                if (n.deg >= 2 && n.hx >= 0 && n.hx <= net.width
-                    && n.hy >= 0 && n.hy <= net.height) {
-                    visible.push(i);
-                }
+                if (net.nodes[i].deg >= 2 && onScreen(i)) visible.push(i);
             }
             if (visible.length < 2) return false;
             from = pick(visible);
@@ -489,10 +500,6 @@ export class Simulation {
             }
         }
 
-        const onScreen = (i) => {
-            const n = net.nodes[i];
-            return n.hx >= 0 && n.hx <= net.width && n.hy >= 0 && n.hy <= net.height;
-        };
         let candidates = [];
         for (let i = 0; i < net.nodes.length; i++) {
             if (dist[i] >= config.SIGNAL_HOPS_MIN && dist[i] <= config.SIGNAL_HOPS_MAX

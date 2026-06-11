@@ -128,25 +128,18 @@ function drawBokeh(ctx, items, time, view, offsetFactor, rotFactor) {
     ctx.restore();
 }
 
-// Subtle particles flying slowly towards the viewer: simple perspective
-// projection, so they grow and drift outward as they approach.
-function drawStars(ctx, stars, view) {
+// Subtle particles flying slowly towards the viewer; the simulation step
+// projects them (sx, sy, size, fade), this just draws the result.
+function drawStars(ctx, stars) {
     if (stars.length === 0) return;
-    const cx = view.w / 2, cy = view.h / 2;
-    const f = Math.min(view.w, view.h) * 0.5;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const s of stars) {
-        const z = Math.max(0.05, s.z);
-        const x = cx + s.ux * f / z;
-        const y = cy + s.uy * f / z;
-        // Fade in when far away, fade out as they get close.
-        const fade = Math.min(1, (1 - s.z) * 6) * Math.min(1, (s.z - 0.1) * 4);
-        if (fade <= 0) continue;
-        ctx.globalAlpha = s.alpha * fade;
+        if (!(s.fade > 0)) continue;
+        ctx.globalAlpha = s.alpha * s.fade;
         ctx.fillStyle = s.color;
         ctx.beginPath();
-        ctx.arc(x, y, s.r / z * 0.6, 0, TAU);
+        ctx.arc(s.sx, s.sy, s.size, 0, TAU);
         ctx.fill();
     }
     ctx.restore();
@@ -374,7 +367,7 @@ export function renderMain(ctx, sim, view) {
     });
 
     drawBokeh(ctx, sim.fgBokeh, sim.time, view, config.OFFSET_FG, config.ROT_MAIN);
-    drawStars(ctx, sim.stars, view);
+    drawStars(ctx, sim.stars);
 
     // Soft vignette keeps the corners calm and the centre readable.
     ctx.fillStyle = gradients(ctx, w, h).vig;
