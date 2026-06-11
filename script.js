@@ -1,13 +1,16 @@
 // script.js
-// Bootstraps the background simulation: canvas sizing, pointer tracking,
-// the animation loop and reduced-motion handling.
+// Bootstraps the background simulation: two canvases (blurred depth layer
+// behind a sharp main layer), camera sway/rotation, pointer tracking, click
+// bursts, the animation loop and reduced-motion handling.
 
 import { config } from './config.js';
 import { Simulation } from './network.js';
-import { render } from './renderer.js';
+import { renderDepth, renderMain, screenToLayer } from './renderer.js';
 
-const canvas = document.getElementById('background-canvas');
-const ctx = canvas.getContext('2d');
+const mainCanvas = document.getElementById('background-canvas');
+const depthCanvas = document.getElementById('background-canvas-depth');
+const mainCtx = mainCanvas.getContext('2d');
+const depthCtx = depthCanvas.getContext('2d');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 const view = {
@@ -16,46 +19,82 @@ const view = {
     dpr: 1,
     pointer: { x: 0, y: 0, strength: 0, targetStrength: 0 },
     parallax: { x: 0, y: 0, tx: 0, ty: 0 },
+    offset: { x: 0, y: 0 },  // combined parallax + sway, in px
+    rot: 0,                  // camera rotation, radians
 };
 
-let sim = null;
+let simMain = null;
+let simDepth = null;
 let rafId = null;
 let rebuildTimer = 0;
+let elapsed = 0;
 
-function fitCanvas() {
-    view.w = canvas.clientWidth;
-    view.h = canvas.clientHeight;
+function fitCanvases() {
+    view.w = mainCanvas.clientWidth;
+    view.h = mainCanvas.clientHeight;
     view.dpr = Math.min(window.devicePixelRatio || 1, config.MAX_DPR);
-    canvas.width = Math.round(view.w * view.dpr);
-    canvas.height = Math.round(view.h * view.dpr);
-    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    mainCanvas.width = Math.round(view.w * view.dpr);
+    mainCanvas.height = Math.round(view.h * view.dpr);
+    mainCtx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    // The depth canvas renders at reduced resolution; CSS blur hides it.
+    const ds = config.DEPTH_RES_SCALE;
+    depthCanvas.width = Math.max(1, Math.round(view.w * ds));
+    depthCanvas.height = Math.max(1, Math.round(view.h * ds));
+    depthCtx.setTransform(ds, 0, 0, ds, 0, 0);
+}
+
+function renderBoth() {
+    renderDepth(depthCtx, simDepth, view);
+    renderMain(mainCtx, simMain, view);
 }
 
 function rebuild() {
-    fitCanvas();
-    if (sim) sim.rebuild(view.w, view.h);
-    else sim = new Simulation(view.w, view.h);
-    if (reducedMotion.matches) render(ctx, sim, view);
+    fitCanvases();
+    if (simMain) {
+        simMain.rebuild(view.w, view.h);
+        simDepth.rebuild(view.w, view.h);
+    } else {
+        simMain = new Simulation(view.w, view.h, {
+            rotFactor: config.ROT_MAIN,
+            fgBokeh: true,
+        });
+        simDepth = new Simulation(view.w, view.h, {
+            spacingScale: config.DEPTH_SPACING_SCALE,
+            rotFactor: config.ROT_DEPTH,
+            signalMax: config.DEPTH_SIGNAL_MAX,
+            spawnMin: config.DEPTH_SPAWN_MIN_S,
+            spawnMax: config.DEPTH_SPAWN_MAX_S,
+            speedScale: config.DEPTH_SPEED_SCALE,
+            dust: true,
+            bokeh: true,
+        });
+    }
+    if (reducedMotion.matches) renderBoth();
 }
 
 function onResize() {
     const dpr = Math.min(window.devicePixelRatio || 1, config.MAX_DPR);
-    // The canvas is sized with 100lvh, so mobile browser bars toggling the
-    // window height do not change it; only genuine size changes get through.
-    if (canvas.clientWidth === view.w && canvas.clientHeight === view.h
+    // The canvases are sized with 100lvh, so mobile browser bars toggling the
+    // window height do not change them; only genuine size changes get through.
+    if (mainCanvas.clientWidth === view.w && mainCanvas.clientHeight === view.h
         && dpr === view.dpr) return;
-    fitCanvas();
-    if (sim && !reducedMotion.matches) render(ctx, sim, view);
+    fitCanvases();
+    if (simMain && !reducedMotion.matches) renderBoth();
     clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(rebuild, 180);
 }
 
 let last = 0;
 
+const TAU_SWAY = Math.PI * 2 * config.SWAY_FREQ;
+const TAU_ROT = Math.PI * 2 * config.ROT_FREQ;
+const ROT_AMP = config.ROT_AMP_DEG * Math.PI / 180;
+
 function frame(now) {
     rafId = requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
+    elapsed += dt;
 
     const pointerEase = Math.min(1, 5 * dt);
     view.pointer.strength +=
@@ -64,8 +103,18 @@ function frame(now) {
     view.parallax.x += (view.parallax.tx - view.parallax.x) * parallaxEase;
     view.parallax.y += (view.parallax.ty - view.parallax.y) * parallaxEase;
 
-    sim.update(dt);
-    render(ctx, sim, view);
+    // Camera: eased pointer parallax plus a slow autonomous sway and a
+    // gentle rocking rotation, so the scene keeps moving on its own.
+    view.offset.x = view.parallax.x * config.PARALLAX_PX
+        + Math.sin(TAU_SWAY * elapsed + 0.9) * config.SWAY_AMP;
+    view.offset.y = view.parallax.y * config.PARALLAX_PX
+        + Math.sin(TAU_SWAY * 0.8 * elapsed + 2.3) * config.SWAY_AMP * 0.7;
+    view.rot = ROT_AMP * (0.7 * Math.sin(TAU_ROT * elapsed)
+        + 0.3 * Math.sin(TAU_ROT * 0.37 * elapsed + 1.7));
+
+    simMain.update(dt);
+    simDepth.update(dt);
+    renderBoth();
 }
 
 function startLoop() {
@@ -91,6 +140,16 @@ window.addEventListener('pointermove', (ev) => {
     view.parallax.ty = (0.5 - ev.clientY / Math.max(1, view.h)) * 2;
 }, { passive: true });
 
+// Click or tap anywhere (except the links) pops the nearest node and
+// bursts a few signals out of it.
+window.addEventListener('pointerdown', (ev) => {
+    if (reducedMotion.matches || !simMain) return;
+    if (ev.target && ev.target.closest && ev.target.closest('a, button')) return;
+    const p = screenToLayer(view, config.OFFSET_MAIN, config.ROT_MAIN,
+        ev.clientX, ev.clientY);
+    simMain.burstAt(p.x, p.y);
+}, { passive: true });
+
 const resetPointer = () => {
     view.pointer.targetStrength = 0;
     view.parallax.tx = 0;
@@ -103,7 +162,10 @@ if (typeof reducedMotion.addEventListener === 'function') {
     reducedMotion.addEventListener('change', () => {
         if (reducedMotion.matches) {
             stopLoop();
-            render(ctx, sim, view);
+            view.offset.x = 0;
+            view.offset.y = 0;
+            view.rot = 0;
+            renderBoth();
         } else {
             startLoop();
         }

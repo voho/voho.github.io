@@ -1,10 +1,10 @@
 // network.js
-// Builds the background graph and runs the simulation state.
+// Builds the background graphs and runs the simulation state.
 //
-// Layout: nodes sit on a jittered grid (one extra ring outside the viewport
-// so the mesh bleeds past every screen edge), connected by a Delaunay
+// Layout: nodes sit on a jittered grid (padded well past the viewport so the
+// mesh survives camera sway and rotation), connected by a Delaunay
 // triangulation that is thinned to a lighter web. Delaunay triangulations
-// are planar, and removing edges keeps them planar, so the mesh can never
+// are planar, and removing edges keeps them planar, so a mesh can never
 // contain crossing lines. A spanning tree is always kept whole, so every
 // node stays reachable for the routed signals.
 
@@ -139,21 +139,25 @@ class DSU {
 
 // --- Network construction -------------------------------------------------------
 
-export function buildNetwork(width, height) {
+export function buildNetwork(width, height, spacingScale = 1, pad = 0) {
     const area = Math.max(1, width * height);
     const spacing = Math.min(config.SPACING_MAX,
-        Math.max(config.SPACING_MIN, Math.sqrt(area / config.SPACING_AREA_DIVISOR)));
+        Math.max(config.SPACING_MIN, Math.sqrt(area / config.SPACING_AREA_DIVISOR)))
+        * spacingScale;
 
     const cols = Math.max(2, Math.round(width / spacing));
     const rows = Math.max(2, Math.round(height / spacing));
     const cellW = width / cols;
     const cellH = height / rows;
 
-    // One extra ring of nodes outside the viewport so the mesh covers the
-    // whole screen edge-to-edge (and survives the small parallax shift).
+    // Margin rings outside the viewport: one always, plus enough cells to
+    // cover the requested padding (camera sway, parallax and rotation).
+    const mC = 1 + Math.ceil(pad / cellW);
+    const mR = 1 + Math.ceil(pad / cellH);
+
     const nodes = [];
-    for (let r = -1; r <= rows; r++) {
-        for (let c = -1; c <= cols; c++) {
+    for (let r = -mR; r < rows + mR; r++) {
+        for (let c = -mC; c < cols + mC; c++) {
             const x = (c + 0.5) * cellW + rand(-1, 1) * cellW * config.JITTER;
             const y = (r + 0.5) * cellH + rand(-1, 1) * cellH * config.JITTER;
             nodes.push({
@@ -179,7 +183,7 @@ export function buildNetwork(width, height) {
     const all = delaunayEdges(nodes)
         .map(([a, b]) => {
             const dx = nodes[a].x - nodes[b].x, dy = nodes[a].y - nodes[b].y;
-            return { a, b, len: Math.sqrt(dx * dx + dy * dy), lit: 0, color: null };
+            return { a, b, len: Math.sqrt(dx * dx + dy * dy), lit: 0, color: null, bucket: 0 };
         })
         .sort((e, f) => e.len - f.len);
 
@@ -205,11 +209,20 @@ export function buildNetwork(width, height) {
     // Largest drift radius that provably cannot create a crossing: if every
     // node stays closer to home than half its distance to the nearest
     // non-incident edge, no segment can ever sweep across another.
-    let minClearance = Infinity;
+    // Clearances above the drift cap cannot change the result, so start the
+    // minimum there and reject far-away pairs with a cheap bounding test.
+    for (const e of edges) {
+        e.mx = (nodes[e.a].hx + nodes[e.b].hx) / 2;
+        e.my = (nodes[e.a].hy + nodes[e.b].hy) / 2;
+    }
+    let minClearance = spacing * config.DRIFT_MAX_FRAC / config.DRIFT_SAFETY;
     for (let i = 0; i < nodes.length; i++) {
         const p = nodes[i];
         for (const e of edges) {
             if (e.a === i || e.b === i) continue;
+            const reach = e.len / 2 + minClearance;
+            const dx = p.hx - e.mx, dy = p.hy - e.my;
+            if (dx * dx + dy * dy > reach * reach) continue;
             const d = pointSegDist(p.hx, p.hy,
                 nodes[e.a].hx, nodes[e.a].hy, nodes[e.b].hx, nodes[e.b].hy);
             if (d < minClearance) minClearance = d;
@@ -221,33 +234,86 @@ export function buildNetwork(width, height) {
     return { width, height, spacing, nodes, edges, adj, drift };
 }
 
+// --- Floating particles (dust and bokeh) ------------------------------------------
+
+function makeFloaters(count, width, height, rMin, rMax, aMin, aMax, mode) {
+    const items = [];
+    for (let i = 0; i < count; i++) {
+        const upward = mode === 'dust';
+        items.push({
+            x: rand(-40, width + 40),
+            y: rand(-40, height + 40),
+            r: rand(rMin, rMax),
+            alpha: rand(aMin, aMax),
+            vx: upward ? 0 : rand(-config.BOKEH_DRIFT, config.BOKEH_DRIFT),
+            vy: upward
+                ? -rand(config.DUST_SPEED_MIN, config.DUST_SPEED_MAX)
+                : rand(-config.BOKEH_DRIFT, config.BOKEH_DRIFT),
+            tw: rand(upward ? 0.2 : 0.04, upward ? 0.6 : 0.12) * TAU,
+            twPhase: rand(0, TAU),
+        });
+    }
+    return items;
+}
+
+function updateFloaters(items, dt, width, height) {
+    for (const f of items) {
+        f.x += f.vx * dt;
+        f.y += f.vy * dt;
+        const m = f.r * 3 + 30;
+        if (f.x < -m) f.x = width + m;
+        if (f.x > width + m) f.x = -m;
+        if (f.y < -m) { f.y = height + m; f.x = rand(-40, width + 40); }
+        if (f.y > height + m) f.y = -m;
+    }
+}
+
 // --- Simulation -------------------------------------------------------------------
 
 export class Simulation {
-    constructor(width, height) {
+    constructor(width, height, opts = {}) {
+        this.opts = Object.assign({
+            spacingScale: 1,
+            rotFactor: config.ROT_MAIN,
+            signalMax: config.SIGNAL_MAX,
+            spawnMin: config.SIGNAL_SPAWN_MIN_S,
+            spawnMax: config.SIGNAL_SPAWN_MAX_S,
+            speedScale: 1,
+            dust: false,
+            bokeh: false,
+            fgBokeh: false,
+        }, opts);
         this.time = 0;
         this.rebuild(width, height);
     }
 
     rebuild(width, height) {
-        this.net = buildNetwork(width, height);
+        // Padding so the mesh still covers the screen at the extremes of
+        // parallax, sway and this layer's rotation.
+        const maxRot = Math.abs(this.opts.rotFactor) * config.ROT_AMP_DEG * Math.PI / 180;
+        const pad = Math.hypot(width, height) / 2 * Math.sin(maxRot)
+            + config.PARALLAX_PX + config.SWAY_AMP + 30;
+
+        this.net = buildNetwork(width, height, this.opts.spacingScale, pad);
         this.signals = [];
         this.rings = [];
+        this.sparks = [];
         this.spawnIn = rand(0.2, 0.8);
 
-        this.dust = [];
-        const count = Math.round((width * height) / config.DUST_AREA_PER_PARTICLE);
-        for (let i = 0; i < count; i++) {
-            this.dust.push({
-                x: rand(-20, width + 20),
-                y: rand(-20, height + 20),
-                r: rand(0.5, 1.5),
-                alpha: rand(0.12, 0.4),
-                vy: -rand(config.DUST_SPEED_MIN, config.DUST_SPEED_MAX),
-                tw: rand(0.2, 0.6) * TAU,
-                twPhase: rand(0, TAU),
-            });
-        }
+        this.dust = this.opts.dust
+            ? makeFloaters(Math.round(width * height / config.DUST_AREA_PER_PARTICLE),
+                width, height, 0.5, 1.5, 0.12, 0.4, 'dust')
+            : [];
+        this.bokeh = this.opts.bokeh
+            ? makeFloaters(Math.max(3, Math.round(width * height / config.BOKEH_AREA_PER)),
+                width, height, config.BOKEH_R_MIN, config.BOKEH_R_MAX,
+                config.BOKEH_ALPHA_MIN, config.BOKEH_ALPHA_MAX, 'bokeh')
+            : [];
+        this.fgBokeh = this.opts.fgBokeh
+            ? makeFloaters(config.FG_BOKEH_COUNT, width, height,
+                config.FG_BOKEH_R_MIN, config.FG_BOKEH_R_MAX,
+                config.FG_BOKEH_ALPHA_MIN, config.FG_BOKEH_ALPHA_MAX, 'bokeh')
+            : [];
     }
 
     update(dt) {
@@ -272,41 +338,45 @@ export class Simulation {
 
         // Signals.
         this.spawnIn -= dt;
-        if (this.spawnIn <= 0 && this.signals.length < config.SIGNAL_MAX) {
+        if (this.spawnIn <= 0 && this.signals.length < this.opts.signalMax) {
             this._spawnSignal();
-            this.spawnIn = rand(config.SIGNAL_SPAWN_MIN_S, config.SIGNAL_SPAWN_MAX_S);
+            this.spawnIn = rand(this.opts.spawnMin, this.opts.spawnMax);
         }
         for (const s of this.signals) this._advanceSignal(s, dt);
         this.signals = this.signals.filter(s => !s.done);
 
-        // Arrival rings.
+        // Arrival effects.
         for (const ring of this.rings) ring.t += dt;
         this.rings = this.rings.filter(r => r.t < config.RING_DURATION_S);
+        for (const spark of this.sparks) spark.t += dt;
+        this.sparks = this.sparks.filter(s => s.t < config.SPARK_DURATION_S);
 
-        // Dust drifts slowly upward and wraps around.
-        for (const d of this.dust) {
-            d.y += d.vy * dt;
-            if (d.y < -24) {
-                d.y = net.height + 20;
-                d.x = rand(-20, net.width + 20);
-            }
-        }
+        // Particles.
+        updateFloaters(this.dust, dt, net.width, net.height);
+        updateFloaters(this.bokeh, dt, net.width, net.height);
+        updateFloaters(this.fgBokeh, dt, net.width, net.height);
     }
 
-    // Picks a visible source, BFS-routes to a visible target a few hops away
-    // and starts a packet along the shortest path.
-    _spawnSignal() {
+    // Routes a packet along the shortest path from a source to a target a few
+    // hops away. With no arguments it picks a random visible source.
+    _spawnSignal(forcedFrom = null, gen = 0, inheritColor = null) {
         const net = this.net;
-        const visible = [];
-        for (let i = 0; i < net.nodes.length; i++) {
-            const n = net.nodes[i];
-            if (n.deg >= 2 && n.hx >= 0 && n.hx <= net.width
-                && n.hy >= 0 && n.hy <= net.height) {
-                visible.push(i);
+        if (this.signals.length >= config.SIGNAL_HARD_CAP) return false;
+
+        let from = forcedFrom;
+        if (from === null) {
+            const visible = [];
+            for (let i = 0; i < net.nodes.length; i++) {
+                const n = net.nodes[i];
+                if (n.deg >= 2 && n.hx >= 0 && n.hx <= net.width
+                    && n.hy >= 0 && n.hy <= net.height) {
+                    visible.push(i);
+                }
             }
+            if (visible.length < 2) return false;
+            from = pick(visible);
         }
-        if (visible.length < 2) return;
-        const from = pick(visible);
+        if (net.adj[from].length === 0) return false;
 
         const dist = new Int32Array(net.nodes.length).fill(-1);
         const prev = new Int32Array(net.nodes.length).fill(-1);
@@ -323,10 +393,23 @@ export class Simulation {
             }
         }
 
-        let candidates = visible.filter(i =>
-            dist[i] >= config.SIGNAL_HOPS_MIN && dist[i] <= config.SIGNAL_HOPS_MAX);
-        if (candidates.length === 0) candidates = visible.filter(i => dist[i] >= 2);
-        if (candidates.length === 0) return;
+        const onScreen = (i) => {
+            const n = net.nodes[i];
+            return n.hx >= 0 && n.hx <= net.width && n.hy >= 0 && n.hy <= net.height;
+        };
+        let candidates = [];
+        for (let i = 0; i < net.nodes.length; i++) {
+            if (dist[i] >= config.SIGNAL_HOPS_MIN && dist[i] <= config.SIGNAL_HOPS_MAX
+                && onScreen(i)) {
+                candidates.push(i);
+            }
+        }
+        if (candidates.length === 0) {
+            for (let i = 0; i < net.nodes.length; i++) {
+                if (dist[i] >= 2 && onScreen(i)) candidates.push(i);
+            }
+        }
+        if (candidates.length === 0) return false;
         const to = pick(candidates);
 
         const path = [to];
@@ -340,23 +423,33 @@ export class Simulation {
             edgeIdx.push(net.adj[path[i]].find(l => l.n === path[i + 1]).e);
         }
 
-        const color = Math.random() < config.SIGNAL_ACCENT_CHANCE
+        const color = inheritColor || (Math.random() < config.SIGNAL_ACCENT_CHANCE
             ? config.SIGNAL_ACCENT
-            : pick(config.SIGNAL_COLORS);
+            : pick(config.SIGNAL_COLORS));
 
         this.signals.push({
             path,
             edgeIdx,
-            leg: 0,     // index into edgeIdx
-            t: 0,       // 0..1 progress along the current leg
-            speed: rand(config.SIGNAL_SPEED_MIN, config.SIGNAL_SPEED_MAX),
+            leg: 0,                              // index into edgeIdx
+            t: 0,                                // 0..1 progress along the current leg
+            wait: config.SIGNAL_LAUNCH_DELAY_S,  // charge-up pause before launch
+            speed: rand(config.SIGNAL_SPEED_MIN, config.SIGNAL_SPEED_MAX)
+                * this.opts.speedScale,
             color,
+            gen,
             done: false,
         });
         net.nodes[from].lit = 1;
+        return true;
     }
 
     _advanceSignal(s, dt) {
+        if (s.wait > 0) {
+            s.wait -= dt;
+            if (s.wait > 0) return;
+            dt = -s.wait; // spend the leftover time moving
+            s.wait = 0;
+        }
         const net = this.net;
         let remaining = s.speed * dt;
         while (remaining > 0 && !s.done) {
@@ -375,10 +468,58 @@ export class Simulation {
                 s.leg++;
                 if (s.leg >= s.edgeIdx.length) {
                     s.done = true;
-                    const target = net.nodes[s.path[s.path.length - 1]];
-                    this.rings.push({ node: target, t: 0, color: s.color });
+                    this._arrive(net.nodes[s.path[s.path.length - 1]],
+                        s.path[s.path.length - 1], s);
                 }
             }
         }
+    }
+
+    _arrive(node, nodeIdx, signal) {
+        this._popAt(node, signal.color);
+        // Sometimes the arrival relays a fresh signal onward: a small cascade.
+        if (signal.gen < config.CASCADE_MAX_GEN
+            && Math.random() < config.CASCADE_CHANCE) {
+            this._spawnSignal(nodeIdx, signal.gen + 1, signal.color);
+        }
+    }
+
+    // Double ring + spark burst: the satisfying "pop".
+    _popAt(node, color) {
+        this.rings.push({ node, t: 0, color, alphaScale: 1 });
+        this.rings.push({
+            node, t: -config.RING_ECHO_DELAY_S, color,
+            alphaScale: config.RING_ECHO_ALPHA_SCALE,
+        });
+        const base = rand(0, TAU);
+        for (let i = 0; i < config.SPARK_COUNT; i++) {
+            this.sparks.push({
+                node,
+                angle: base + (i / config.SPARK_COUNT) * TAU + rand(-0.3, 0.3),
+                t: 0,
+                color,
+            });
+        }
+    }
+
+    // Click / tap: pop the nearest node and burst signals out of it.
+    burstAt(x, y) {
+        const net = this.net;
+        let best = -1, bestD2 = config.CLICK_RADIUS * config.CLICK_RADIUS;
+        for (let i = 0; i < net.nodes.length; i++) {
+            const n = net.nodes[i];
+            if (n.deg === 0) continue;
+            const dx = n.x - x, dy = n.y - y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestD2) { bestD2 = d2; best = i; }
+        }
+        if (best < 0) return false;
+        const node = net.nodes[best];
+        node.lit = 1;
+        this._popAt(node, pick(config.SIGNAL_COLORS));
+        for (let i = 0; i < config.CLICK_BURST; i++) {
+            this._spawnSignal(best, 1);
+        }
+        return true;
     }
 }
