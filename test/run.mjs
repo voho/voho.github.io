@@ -125,7 +125,18 @@ check('depth bokeh uses the grey palette',
 // --- Ignition: the one-off wavefront that lights the mesh on load ----------------
 {
     const ign = new Simulation(1440, 900, mainOpts);
+    // Let ordinary traffic get going first: the reveal can be delayed by a
+    // slow webfont, and the wave has to start from a blank mesh regardless.
+    for (let i = 0; i < 60; i++) ign.update(1 / 60);
+    ign.burstAt(700, 450);
+    const busy = ign.signals.length > 0
+        || ign.net.edges.some(e => e.lit > 0) || ign.sparks.length > 0;
     ign.ignite(config.IGNITE_DELAY_S);
+    check('ignition blanks whatever was already running',
+        busy && ign.signals.length === 0 && ign.sparks.length === 0
+        && ign.rings.length === 0
+        && ign.net.edges.every(e => e.lit === 0 && e.color === null)
+        && ign.net.nodes.every(n => n.lit === 0));
     const t0 = process.hrtime.bigint();
     let steps = 0;
     while (ign.wave && steps < 20 * 60) {
@@ -141,6 +152,8 @@ check('depth bokeh uses the grey palette',
         new Set(ign.net.edges.map(e => e.color)).size >= 6);
     check('ignition leaves the mesh planar', countCrossings(ign.net) === 0);
     check('ignition costs no more than a normal frame', ms < 1);
+    check('ordinary traffic waits for the wave to finish',
+        ign.signals.length === 0 && ign.spawnIn > 0);
 
     const mono = new Simulation(1440, 900, depthOpts);
     mono.ignite(0);

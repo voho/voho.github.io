@@ -430,8 +430,24 @@ export class Simulation {
     // Lights the whole mesh once with a wavefront expanding from the centre:
     // the "switch on" moment when the page loads. Nodes are pre-sorted by
     // distance, so each frame only touches the ones the front just reached.
+    //
+    // The mesh is blanked first: the simulation may have been running
+    // (invisibly) for a while before the page was ready to reveal it, and a
+    // signal already half-way across would spoil the centre-out switch-on.
     ignite(delay = 0) {
         const net = this.net;
+        this.signals = [];
+        this.rings = [];
+        this.sparks = [];
+        for (const n of net.nodes) {
+            n.lit = 0;
+            n.waveLit = false;
+        }
+        for (const e of net.edges) {
+            e.lit = 0;
+            e.color = null;
+        }
+
         const cx = net.width / 2, cy = net.height / 2;
         const dist = new Float64Array(net.nodes.length);
         for (let i = 0; i < net.nodes.length; i++) {
@@ -439,8 +455,13 @@ export class Simulation {
         }
         const order = Array.from({ length: net.nodes.length }, (_, i) => i)
             .sort((a, b) => dist[a] - dist[b]);
-        for (const n of net.nodes) n.waveLit = false;
         this.wave = { order, dist, i: 0, r: 0, delay };
+
+        // Hold ordinary traffic until the wave has swept the whole mesh, so
+        // the switch-on is the only thing happening while it runs.
+        const reach = order.length ? dist[order[order.length - 1]] : 0;
+        this.spawnIn = delay + reach / config.IGNITE_SPEED
+            + rand(this.opts.spawnMin, this.opts.spawnMax);
     }
 
     _advanceWave(dt) {

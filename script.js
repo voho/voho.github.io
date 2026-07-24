@@ -133,6 +133,24 @@ function writeParallax() {
     root.style.setProperty('--bd-y', `${by.toFixed(2)}px`);
 }
 
+// The loop is what returns these to zero, so anything that stops the loop
+// has to centre them itself or the content stays where it last drifted.
+function centreContent() {
+    lastFgX = NaN;
+    lastFgY = NaN;
+    for (const name of ['--fg-x', '--fg-y', '--bd-x', '--bd-y']) {
+        root.style.setProperty(name, '0px');
+    }
+    for (const b of buttons) {
+        b.x = 0;
+        b.y = 0;
+        b.wx = 0;
+        b.wy = 0;
+        b.el.style.setProperty('--mx', '0px');
+        b.el.style.setProperty('--my', '0px');
+    }
+}
+
 // --- Magnetic buttons ------------------------------------------------------
 // On fine pointers the buttons lean towards the cursor as it approaches.
 
@@ -191,6 +209,10 @@ function degrade() {
         fitCanvases();
     }
     applyQuality();
+    // Degrading runs after this frame has been drawn, and resizing a canvas
+    // clears it. Without an immediate repaint the far layer would stay blank
+    // until its next turn, which is now every fourth frame.
+    renderBoth();
 }
 
 function governQuality(dt) {
@@ -374,6 +396,7 @@ if (typeof reducedMotion.addEventListener === 'function') {
             view.offset.x = 0;
             view.offset.y = 0;
             view.rot = 0;
+            centreContent();
             renderBoth();
         } else {
             startLoop();
