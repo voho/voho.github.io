@@ -8,6 +8,10 @@ export const config = {
     SPACING_AREA_DIVISOR: 130,
     SPACING_MIN: 88,
     SPACING_MAX: 150,
+    // Area alone leaves narrow (phone) viewports with only ~4 cells across,
+    // which reads as a handful of huge triangles. Cap the spacing so the
+    // short axis always fits at least this many cells.
+    MIN_CELLS_SHORT_AXIS: 6,
     JITTER: 0.36,              // node offset from its grid point (fraction of a cell)
     EXTRA_EDGE_KEEP: 0.5,      // share of non-spanning-tree edges kept when thinning
     LONG_EDGE_FACTOR: 1.9,     // drop non-tree edges longer than spacing * factor
@@ -134,6 +138,21 @@ export const config = {
     DEPTH_SPEED_SCALE: 0.55,
     DEPTH_RING_SCALE: 0.6,
 
+    // --- Ignition: a shockwave that lights the whole mesh once, on load ---------------
+    IGNITE_SPEED: 1350,        // px/s the wavefront travels outwards
+    IGNITE_RING_PX: 150,       // the wave steps one palette colour every this many px
+    IGNITE_DELAY_S: 0.12,      // beat of darkness before the world switches on
+    IGNITE_DEPTH_DELAY_S: 0.3, // the far layer catches fire a little later
+
+    // --- Aurora: huge, very faint colour blooms drifting in the far layer -------------
+    // Barely visible on their own; together they stop the background from
+    // reading as flat black and give the mesh something to float in.
+    AURORA: [
+        { color: '#3d6bff', r: 0.95, alpha: 0.1, ox: 0.24, oy: 0.16, freq: 0.011, phase: 0 },
+        { color: '#b268ff', r: 0.8, alpha: 0.07, ox: 0.3, oy: 0.2, freq: 0.008, phase: 2.4 },
+        { color: '#2fd3c0', r: 0.7, alpha: 0.05, ox: 0.26, oy: 0.24, freq: 0.013, phase: 4.1 },
+    ],
+
     // --- Camera: pointer parallax + sway + continuous slow rotation -------------------
     PARALLAX_PX: 8,            // px of shift when the cursor reaches a screen edge
     PARALLAX_EASE: 3,          // lerp speed, 1/s
@@ -152,6 +171,35 @@ export const config = {
     HOVER_NODE_BOOST: 0.6,     // extra brightness / radius for nodes near the cursor
     CLICK_RADIUS: 240,         // a click fires a burst from the nearest node within this
     CLICK_BURST: 3,            // signals emitted per click
+    // Torch: the cursor (or a dragging finger) lights the edges around it, so
+    // moving across the page feels like sweeping a lamp over a spider web.
+    TORCH_RADIUS: 200,
+    TORCH_ALPHA: 0.6,
+    TORCH_RGB: [158, 196, 255],
+    // Phone tilt drives the same parallax the mouse does on the desktop.
+    TILT_RANGE_DEG: 22,        // tilt that reaches full parallax
+    TILT_RECENTER: 0.004,      // per-event drift of the neutral pose, so it never pins
+
+    // --- Content parallax (the text floats against the field) -------------------------
+    CONTENT_PARALLAX: -0.4,    // content counter-moves; negative = towards the viewer
+    BACKDROP_PARALLAX: 1.5,
+
+    // --- Magnetic buttons (fine pointers only) ----------------------------------------
+    MAGNET_RADIUS: 130,
+    MAGNET_PULL: 0.22,         // fraction of the cursor distance the button travels
+    MAGNET_MAX: 9,             // px
+    MAGNET_EASE: 9,            // lerp speed, 1/s
 
     MAX_DPR: 2,
+
+    // --- Quality governor ---------------------------------------------------------------
+    // The scene degrades once, in steps, if a device cannot hold the frame
+    // rate. It never upgrades again, so quality cannot oscillate.
+    QUALITY_SAMPLE_S: 2,       // length of an fps sample window
+    QUALITY_GRACE_S: 2.5,      // ignore the first seconds (load, ignition, fonts)
+    QUALITY_MIN_FPS: 42,
+    QUALITY_STEPS: [
+        { depthEvery: 3, fgBokeh: false },
+        { depthEvery: 4, fgBokeh: false, maxDpr: 1.25, torch: false },
+    ],
 };
