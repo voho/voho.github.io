@@ -20,12 +20,12 @@ function rgba(rgb, alpha) {
 }
 
 // Pre-rendered radial gradients; much cheaper and softer than shadowBlur.
-function sprite(key, build) {
+function sprite(key, build, size = 64) {
     let s = spriteCache.get(key);
     if (!s) {
         s = document.createElement('canvas');
-        s.width = s.height = 64;
-        build(s.getContext('2d'));
+        s.width = s.height = size;
+        build(s.getContext('2d'), size);
         spriteCache.set(key, s);
     }
     return s;
@@ -50,6 +50,37 @@ function haloSprite(color) {
         g.fillStyle = grad;
         g.fillRect(0, 0, 64, 64);
     });
+}
+
+// A wide, gentle falloff — the aurora blooms are drawn many times their
+// sprite size, so the gradient has to stay smooth when scaled way up.
+function bloomSprite(color) {
+    return sprite(`bloom:${color}`, (g, size) => {
+        const c = size / 2;
+        const grad = g.createRadialGradient(c, c, 0, c, c, c);
+        grad.addColorStop(0, hexToRgba(color, 1));
+        grad.addColorStop(0.45, hexToRgba(color, 0.32));
+        grad.addColorStop(1, hexToRgba(color, 0));
+        g.fillStyle = grad;
+        g.fillRect(0, 0, size, size);
+    }, 256);
+}
+
+// Huge, slowly orbiting colour clouds behind everything else. They are far
+// too faint to read as shapes; they just keep the void from being flat.
+function drawAurora(ctx, time, w, h) {
+    const span = Math.max(w, h);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const a of config.AURORA) {
+        const t = TAU * a.freq * time + a.phase;
+        const r = span * a.r;
+        const x = w / 2 + Math.cos(t) * w * a.ox;
+        const y = h / 2 + Math.sin(t * 0.83 + 1.1) * h * a.oy;
+        ctx.globalAlpha = a.alpha * (0.85 + 0.15 * Math.sin(t * 1.7));
+        ctx.drawImage(bloomSprite(a.color), x - r, y - r, r * 2, r * 2);
+    }
+    ctx.restore();
 }
 
 function easeOutCubic(t) {
@@ -225,6 +256,27 @@ function drawMesh(ctx, sim, view, o) {
     // Light passes are additive so overlapping glows blend nicely.
     ctx.globalCompositeOperation = 'lighter';
 
+    // Torch: edges around the cursor (or a dragging finger) brighten, so
+    // moving over the page sweeps a lamp across the web.
+    if (o.torch && pointerStrength > 0.01) {
+        const R = config.TORCH_RADIUS;
+        ctx.lineWidth = config.EDGE_WIDTH;
+        for (const e of net.edges) {
+            const a = net.nodes[e.a], b = net.nodes[e.b];
+            const dx = (a.x + b.x) * 0.5 - p.x;
+            const dy = (a.y + b.y) * 0.5 - p.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > R * R) continue;
+            const falloff = 1 - Math.sqrt(d2) / R;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.strokeStyle = rgba(config.TORCH_RGB,
+                falloff * falloff * pointerStrength * config.TORCH_ALPHA);
+            ctx.stroke();
+        }
+    }
+
     // Fading trails on recently travelled edges.
     for (const e of net.edges) {
         if (e.lit <= 0.02 || !e.color) continue;
@@ -323,7 +375,8 @@ function drawMesh(ctx, sim, view, o) {
     ctx.restore();
 }
 
-// The blurred far canvas: background gradient, dust, bokeh and the far mesh.
+// The blurred far canvas: background gradient, aurora, dust, bokeh and the
+// far mesh.
 export function renderDepth(ctx, sim, view) {
     const { w, h } = view;
     const g = gradients(ctx, w, h);
@@ -332,6 +385,7 @@ export function renderDepth(ctx, sim, view) {
     ctx.fillStyle = g.glow;
     ctx.fillRect(0, 0, w, h);
 
+    drawAurora(ctx, sim.time, w, h);
     drawDust(ctx, sim.dust, sim.time, view);
     drawBokeh(ctx, sim.bokeh, sim.time, view, config.OFFSET_DUST, 0);
     drawMesh(ctx, sim, view, {
@@ -342,6 +396,7 @@ export function renderDepth(ctx, sim, view) {
         nodeAlpha: config.DEPTH_NODE_ALPHA,
         nodeScale: config.DEPTH_NODE_SCALE,
         hover: false,
+        torch: false,
         ringScale: config.DEPTH_RING_SCALE,
         haloColor: config.DEPTH_HALO_COLOR,
         litScale: config.DEPTH_LIT_SCALE,
@@ -349,7 +404,7 @@ export function renderDepth(ctx, sim, view) {
 }
 
 // The sharp near canvas: main mesh, foreground bokeh and the vignette.
-export function renderMain(ctx, sim, view) {
+export function renderMain(ctx, sim, view, quality = { torch: true }) {
     const { w, h } = view;
     ctx.clearRect(0, 0, w, h);
 
@@ -361,6 +416,7 @@ export function renderMain(ctx, sim, view) {
         nodeAlpha: 1,
         nodeScale: 1,
         hover: true,
+        torch: quality.torch,
         ringScale: 1,
         haloColor: config.HALO_COLOR,
         litScale: 1,

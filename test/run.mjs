@@ -95,7 +95,7 @@ const check = (label, ok) => {
 };
 
 // --- Static layout checks across viewport sizes -------------------------------
-for (const [w, h] of [[1440, 900], [390, 844], [3840, 2160]]) {
+for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
     for (const [name, opts] of [['main', mainOpts], ['depth', depthOpts]]) {
         const t0 = process.hrtime.bigint();
         const sim = new Simulation(w, h, opts);
@@ -106,6 +106,10 @@ for (const [w, h] of [[1440, 900], [390, 844], [3840, 2160]]) {
         check(`${label}: planar`, countCrossings(net) === 0);
         check(`${label}: connected`, connected(net));
         check(`${label}: covers rotation circle`, coversCircle(net, w, h));
+        // Narrow viewports must not degenerate into a few huge cells.
+        const cellCap = Math.min(w, h) / config.MIN_CELLS_SHORT_AXIS
+            * (opts.spacingScale || 1);
+        check(`${label}: short axis has enough cells`, net.spacing <= cellCap + 1e-9);
     }
 }
 
@@ -117,6 +121,57 @@ check('main nodes are colourful',
     sim.net.nodes.filter(n => !isGrey(n.colorStr)).length > sim.net.nodes.length * 0.6);
 check('depth bokeh uses the grey palette',
     simD.bokeh.every(b => config.DEPTH_BOKEH_COLORS.includes(b.color)));
+
+// --- Ignition: the one-off wavefront that lights the mesh on load ----------------
+{
+    const ign = new Simulation(1440, 900, mainOpts);
+    // Let ordinary traffic get going first: the reveal can be delayed by a
+    // slow webfont, and the wave has to start from a blank mesh regardless.
+    for (let i = 0; i < 60; i++) ign.update(1 / 60);
+    ign.burstAt(700, 450);
+    const busy = ign.signals.length > 0
+        || ign.net.edges.some(e => e.lit > 0) || ign.sparks.length > 0;
+    ign.ignite(config.IGNITE_DELAY_S);
+    check('ignition blanks whatever was already running',
+        busy && ign.signals.length === 0 && ign.sparks.length === 0
+        && ign.rings.length === 0
+        && ign.net.edges.every(e => e.lit === 0 && e.color === null)
+        && ign.net.nodes.every(n => n.lit === 0));
+    const t0 = process.hrtime.bigint();
+    let steps = 0;
+    while (ign.wave && steps < 20 * 60) {
+        ign.update(1 / 60);
+        steps++;
+    }
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6 / Math.max(1, steps);
+    check(`ignition finishes promptly (${steps} frames, ${ms.toFixed(3)} ms/frame)`,
+        ign.wave === null && steps > 1 && steps < 150);
+    check('ignition reaches every node', ign.net.nodes.every(n => n.waveLit));
+    check('ignition lights every edge', ign.net.edges.every(e => e.color !== null));
+    check('ignition paints the rainbow',
+        new Set(ign.net.edges.map(e => e.color)).size >= 6);
+    check('ignition leaves the mesh planar', countCrossings(ign.net) === 0);
+    check('ignition costs no more than a normal frame', ms < 1);
+    check('ordinary traffic waits for the wave to finish',
+        ign.signals.length === 0 && ign.spawnIn > 0);
+
+    const mono = new Simulation(1440, 900, depthOpts);
+    mono.ignite(0);
+    while (mono.wave) mono.update(1 / 60);
+    check('ignition stays monochrome on the depth layer',
+        mono.net.edges.every(e => config.DEPTH_SIGNAL_COLORS.includes(e.color)));
+}
+
+// --- Flares fired from a point ----------------------------------------------------
+{
+    const flare = new Simulation(1440, 900, mainOpts);
+    flare.fireFlares(3, 700, 450);
+    const sources = new Set(flare.signals.map(s => s.path[0]));
+    const src = flare.net.nodes[[...sources][0]];
+    check('point flares all start at one node near the target',
+        flare.signals.length > 0 && sources.size === 1
+        && Math.hypot(src.x - 700, src.y - 450) <= config.CLICK_RADIUS);
+}
 
 // --- Soak: 60 simulated seconds with clicks and button flares --------------------
 let crossings = 0, maxSignals = 0;

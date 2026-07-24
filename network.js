@@ -169,8 +169,12 @@ class DSU {
 export function buildNetwork(width, height, spacingScale = 1, padX = 0, padY = 0,
     cropRadius = 0, mono = false) {
     const area = Math.max(1, width * height);
-    const spacing = Math.min(config.SPACING_MAX,
-        Math.max(config.SPACING_MIN, Math.sqrt(area / config.SPACING_AREA_DIVISOR)))
+    // Area sets the density; the short-axis cap keeps narrow viewports from
+    // ending up with a handful of oversized cells.
+    const spacing = Math.min(
+        Math.min(config.SPACING_MAX,
+            Math.max(config.SPACING_MIN, Math.sqrt(area / config.SPACING_AREA_DIVISOR))),
+        Math.min(width, height) / config.MIN_CELLS_SHORT_AXIS)
         * spacingScale;
 
     const cols = Math.max(2, Math.round(width / spacing));
@@ -218,6 +222,7 @@ export function buildNetwork(width, height, spacingScale = 1, padX = 0, padY = 0
                 deg: 0,
                 lit: 0,
                 hover: 0,
+                waveLit: false, // already reached by the ignition wavefront
             });
         }
     }
@@ -399,6 +404,7 @@ export class Simulation {
         this.signals = [];
         this.rings = [];
         this.sparks = [];
+        this.wave = null;
         this.spawnIn = rand(0.2, 0.8);
 
         this.dust = this.opts.dust
@@ -421,6 +427,73 @@ export class Simulation {
         updateStars(this.stars, 0, width, height); // project initial positions
     }
 
+    // Lights the whole mesh once with a wavefront expanding from the centre:
+    // the "switch on" moment when the page loads. Nodes are pre-sorted by
+    // distance, so each frame only touches the ones the front just reached.
+    //
+    // The mesh is blanked first: the simulation may have been running
+    // (invisibly) for a while before the page was ready to reveal it, and a
+    // signal already half-way across would spoil the centre-out switch-on.
+    ignite(delay = 0) {
+        const net = this.net;
+        this.signals = [];
+        this.rings = [];
+        this.sparks = [];
+        for (const n of net.nodes) {
+            n.lit = 0;
+            n.waveLit = false;
+        }
+        for (const e of net.edges) {
+            e.lit = 0;
+            e.color = null;
+        }
+
+        const cx = net.width / 2, cy = net.height / 2;
+        const dist = new Float64Array(net.nodes.length);
+        for (let i = 0; i < net.nodes.length; i++) {
+            dist[i] = Math.hypot(net.nodes[i].hx - cx, net.nodes[i].hy - cy);
+        }
+        const order = Array.from({ length: net.nodes.length }, (_, i) => i)
+            .sort((a, b) => dist[a] - dist[b]);
+        this.wave = { order, dist, i: 0, r: 0, delay };
+
+        // Hold ordinary traffic until the wave has swept the whole mesh, so
+        // the switch-on is the only thing happening while it runs.
+        const reach = order.length ? dist[order[order.length - 1]] : 0;
+        this.spawnIn = delay + reach / config.IGNITE_SPEED
+            + rand(this.opts.spawnMin, this.opts.spawnMax);
+    }
+
+    _advanceWave(dt) {
+        const w = this.wave;
+        if (w.delay > 0) {
+            w.delay -= dt;
+            if (w.delay > 0) return;
+            dt = -w.delay; // spend the leftover time travelling
+            w.delay = 0;
+        }
+        w.r += config.IGNITE_SPEED * dt;
+        const net = this.net;
+        const palette = this.opts.palette;
+        while (w.i < w.order.length && w.dist[w.order[w.i]] <= w.r) {
+            const idx = w.order[w.i++];
+            const node = net.nodes[idx];
+            // Concentric bands of the palette, so the front reads as a
+            // rainbow ripple rather than a flat flash.
+            const color = palette[
+                Math.floor(w.dist[idx] / config.IGNITE_RING_PX) % palette.length];
+            node.lit = 1;
+            for (const link of net.adj[idx]) {
+                if (!net.nodes[link.n].waveLit) continue; // light each edge once
+                const edge = net.edges[link.e];
+                edge.lit = 1;
+                edge.color = color;
+            }
+            node.waveLit = true;
+        }
+        if (w.i >= w.order.length) this.wave = null;
+    }
+
     update(dt) {
         this.time += dt;
         const net = this.net;
@@ -440,6 +513,9 @@ export class Simulation {
         for (const e of net.edges) {
             e.lit = e.lit > 0.001 ? e.lit * edgeDecay : 0;
         }
+
+        // The one-off ignition wavefront, while it is still travelling.
+        if (this.wave) this._advanceWave(dt);
 
         // Signals.
         this.spawnIn -= dt;
@@ -613,17 +689,9 @@ export class Simulation {
         }
     }
 
-    // Fires a few flares from random visible nodes (used on button hover).
-    fireFlares(count) {
-        for (let i = 0; i < count; i++) {
-            this._spawnSignal(null, 1);
-        }
-    }
-
-    // Click / tap: pop the nearest node and burst signals out of it.
-    burstAt(x, y) {
+    _nearestNode(x, y, maxDist) {
         const net = this.net;
-        let best = -1, bestD2 = config.CLICK_RADIUS * config.CLICK_RADIUS;
+        let best = -1, bestD2 = maxDist * maxDist;
         for (let i = 0; i < net.nodes.length; i++) {
             const n = net.nodes[i];
             if (n.deg === 0) continue;
@@ -631,6 +699,30 @@ export class Simulation {
             const d2 = dx * dx + dy * dy;
             if (d2 < bestD2) { bestD2 = d2; best = i; }
         }
+        return best;
+    }
+
+    // Fires a few flares (used on button hover). Given a position, they all
+    // stream out of the node nearest to it, so the button visibly feeds the
+    // network; otherwise they start from random visible nodes.
+    fireFlares(count, x = null, y = null) {
+        let from = null;
+        if (x !== null) {
+            const idx = this._nearestNode(x, y, config.CLICK_RADIUS);
+            if (idx >= 0) {
+                from = idx;
+                this.net.nodes[idx].lit = 1;
+            }
+        }
+        for (let i = 0; i < count; i++) {
+            this._spawnSignal(from, 1);
+        }
+    }
+
+    // Click / tap: pop the nearest node and burst signals out of it.
+    burstAt(x, y) {
+        const net = this.net;
+        const best = this._nearestNode(x, y, config.CLICK_RADIUS);
         if (best < 0) return false;
         const node = net.nodes[best];
         node.lit = 1;

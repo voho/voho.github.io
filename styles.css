@@ -1,5 +1,15 @@
 /* Main styles for Vojta Hordějčuk's website */
 
+:root {
+    --bg: #05070d;
+    --accent: #59d7ff;
+    /* Camera parallax, written every frame by script.js. */
+    --fg-x: 0px;
+    --fg-y: 0px;
+    --bd-x: 0px;
+    --bd-y: 0px;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -12,10 +22,16 @@ body {
 }
 
 body {
-    font-family: 'Fira Sans', sans-serif;
-    background-color: #05070d;
+    font-family: 'Fira Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background-color: var(--bg);
     color: #fff;
     overflow-x: hidden;
+    /* One screen, no scrolling: kill rubber-banding, double-tap zoom delay
+       and the grey flash iOS paints over tapped links. */
+    overscroll-behavior: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
 }
 
 #background-canvas,
@@ -40,26 +56,41 @@ body {
    the blur's soft edges stay outside the viewport. */
 #background-canvas-depth {
     z-index: -2;
-    background-color: #05070d;
+    background-color: var(--bg);
     filter: blur(5px);
     transform: scale(1.05);
 }
 
+/* The field fades up once the first frame is on screen. */
+.js #background-canvas,
+.js #background-canvas-depth {
+    opacity: 0;
+}
+
+.js.is-ready #background-canvas,
+.js.is-ready #background-canvas-depth {
+    opacity: 1;
+    transition: opacity 1.6s ease;
+}
+
+/* Pool of shade that keeps the text readable over a busy mesh. It drifts
+   with the camera, a little further than the content itself. */
 #content-backdrop {
     position: fixed;
     top: 50%;
     left: 50%;
-    transform: translate(-50%, -50%);
-    width: 82vmin;
-    height: 82vmin;
-    background: radial-gradient(circle,
-        rgba(4, 6, 11, 0.85) 0%,
-        rgba(4, 6, 11, 0.6) 35%,
-        rgba(4, 6, 11, 0.25) 60%,
-        rgba(4, 6, 11, 0) 78%);
-    border-radius: 50%;
+    width: min(132vw, 1000px);
+    height: min(96vh, 660px);
+    transform: translate(-50%, -50%) translate3d(var(--bd-x), var(--bd-y), 0);
+    background: radial-gradient(ellipse at center,
+        rgba(4, 6, 11, 0.86) 0%,
+        rgba(4, 6, 11, 0.6) 32%,
+        rgba(4, 6, 11, 0.26) 52%,
+        rgba(4, 6, 11, 0.07) 72%,
+        rgba(4, 6, 11, 0) 88%);
     z-index: 0;
     pointer-events: none;
+    will-change: transform;
 }
 
 .container {
@@ -72,99 +103,322 @@ body {
     justify-content: center;
     align-items: center;
     text-align: center;
-    padding: 20px;
+    padding: 24px 20px; /* fallback where env() is unknown */
+    padding: max(24px, env(safe-area-inset-top))
+             max(20px, env(safe-area-inset-right))
+             max(24px, env(safe-area-inset-bottom))
+             max(20px, env(safe-area-inset-left));
+    transform: translate3d(var(--fg-x), var(--fg-y), 0);
+    will-change: transform;
 }
 
 h1 {
-    font-size: clamp(2.4rem, 7vw, 3.2rem);
+    /* The lower bound is set by the narrowest phone: the name has to stay on
+       one line even in a fallback font, which is wider than Fira Sans. */
+    font-size: clamp(1.95rem, 8.8vw, 4.25rem);
     font-weight: 700;
-    letter-spacing: 0.01em;
-    margin-bottom: 0.5rem;
-    text-shadow: 0 0 36px rgba(98, 156, 255, 0.35), 0 2px 18px rgba(0, 0, 0, 0.8);
+    line-height: 1.04;
+    letter-spacing: -0.018em;
+    overflow-wrap: break-word;
+    margin-bottom: 0.55rem;
+    text-shadow: 0 0 44px rgba(98, 156, 255, 0.4), 0 2px 20px rgba(0, 0, 0, 0.85);
 }
 
 .subtitle {
-    font-size: clamp(1rem, 2.8vw, 1.2rem);
+    font-size: clamp(0.95rem, 3.4vw, 1.15rem);
     font-weight: 400;
-    letter-spacing: 0.08em;
-    color: rgba(255, 255, 255, 0.8);
-    margin-bottom: 0.7rem;
+    letter-spacing: 0.16em;
+    color: rgba(255, 255, 255, 0.74);
+    margin-bottom: 0.95rem;
     text-shadow: 0 2px 14px rgba(0, 0, 0, 0.8);
 }
 
 .claims {
-    font-size: clamp(0.85rem, 2.3vw, 0.95rem);
-    color: rgba(255, 255, 255, 0.55);
-    margin-bottom: 2.2rem;
+    font-size: clamp(0.8rem, 2.6vw, 0.92rem);
+    line-height: 1.7;
+    color: rgba(255, 255, 255, 0.5);
+    margin-bottom: clamp(1.9rem, 5vh, 2.6rem);
     text-shadow: 0 2px 14px rgba(0, 0, 0, 0.8);
 }
 
 .claims a {
-    color: rgba(255, 255, 255, 0.75);
+    color: rgba(255, 255, 255, 0.72);
     text-decoration: underline;
-    text-decoration-color: rgba(255, 255, 255, 0.3);
-    text-underline-offset: 3px;
-    transition: color 0.2s ease, text-decoration-color 0.2s ease;
+    text-decoration-color: rgba(255, 255, 255, 0.28);
+    text-underline-offset: 4px;
+    transition: color 0.25s ease, text-decoration-color 0.25s ease;
 }
 
 .claims a:hover,
 .claims a:focus-visible {
-    color: #59d7ff;
-    text-decoration-color: #59d7ff;
+    color: var(--accent);
+    text-decoration-color: var(--accent);
 }
 
 .claims-sep {
     margin: 0 0.6em;
-    opacity: 0.5;
+    opacity: 0.45;
 }
 
 .buttons {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    align-items: center;
+    gap: 0.85rem;
+    width: 100%;
 }
 
 .button {
-    display: inline-block;
-    padding: 12px 26px;
-    background-color: rgba(8, 13, 24, 0.55);
+    --mx: 0px;
+    --my: 0px;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: min(320px, 100%);
+    min-height: 52px;
+    padding: 0 28px;
+    background-color: rgba(10, 16, 28, 0.5);
     color: #fff;
     text-decoration: none;
-    border: 2px solid rgba(255, 255, 255, 0.85);
-    border-radius: 50px;
+    border: 1.5px solid rgba(255, 255, 255, 0.62);
+    border-radius: 999px;
     font-weight: 700;
-    -webkit-backdrop-filter: blur(6px);
-    backdrop-filter: blur(6px);
-    transition: background-color 0.25s ease, color 0.25s ease,
-        box-shadow 0.25s ease, transform 0.25s ease;
+    letter-spacing: 0.01em;
+    /* Dragging across the page sweeps the torch; it should never smear a
+       text selection over the labels on the way. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12),
+        0 10px 34px rgba(0, 0, 0, 0.34);
+    transform: translate3d(var(--mx), var(--my), 0);
+    transition: background-color 0.28s ease, color 0.28s ease,
+        border-color 0.28s ease, box-shadow 0.28s ease;
 }
 
-.button:hover,
+.button:active {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12),
+        0 4px 14px rgba(0, 0, 0, 0.34);
+}
+
+/* Hover effects only where a real pointer exists — otherwise a tapped
+   button keeps its hover state until you tap something else. */
+@media (hover: hover) and (pointer: fine) {
+    .button:hover {
+        background-color: #fff;
+        color: #05070d;
+        border-color: #fff;
+        box-shadow: 0 8px 40px rgba(110, 175, 255, 0.45),
+            0 0 0 1px rgba(255, 255, 255, 0.5);
+    }
+}
+
 .button:focus-visible {
     background-color: #fff;
     color: #05070d;
-    box-shadow: 0 4px 28px rgba(110, 175, 255, 0.35);
-    transform: translateY(-2px);
+    border-color: #fff;
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
 }
 
-.button:focus-visible {
-    outline: 2px solid #59d7ff;
-    outline-offset: 3px;
+/* An invitation to poke the field, which then gets out of the way. */
+.hint {
+    position: fixed;
+    left: 50%;
+    bottom: 22px; /* fallback where env() is unknown */
+    bottom: max(22px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 1;
+    font-size: 0.65rem;
+    letter-spacing: 0.34em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: rgba(255, 255, 255, 0.3);
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
+    transition: opacity 0.6s ease;
 }
 
-/* Responsive adjustments */
+.hint-inner {
+    display: inline-block;
+    opacity: 0;
+}
+
+.js.is-ready .hint-inner {
+    animation: hint-in 1.2s ease 2.6s both;
+}
+
+.hint-mouse {
+    display: none;
+}
+
+.hint-done .hint {
+    opacity: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .hint-touch {
+        display: none;
+    }
+
+    .hint-mouse {
+        display: inline;
+    }
+}
+
+/* --- Load choreography ---------------------------------------------------
+   The content rises into the mesh as it switches on. Hidden only when
+   scripting is available, so a failed module can never blank the page. */
+
+.js .reveal {
+    opacity: 0;
+}
+
+.js.is-ready .reveal {
+    animation: rise 1s cubic-bezier(0.19, 0.72, 0.24, 1) both;
+    animation-delay: calc(var(--i, 0) * 110ms + 260ms);
+}
+
+/* The buttons carry a backdrop-filter, which does not survive being blurred
+   by an ancestor filter mid-animation. */
+.js.is-ready .buttons.reveal {
+    animation-name: rise-plain;
+}
+
+@keyframes rise {
+    from {
+        opacity: 0;
+        transform: translate3d(0, 20px, 0);
+        filter: blur(12px);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+        filter: blur(0);
+    }
+}
+
+@keyframes rise-plain {
+    from {
+        opacity: 0;
+        transform: translate3d(0, 20px, 0);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes hint-in {
+    from {
+        opacity: 0;
+        letter-spacing: 0.5em;
+    }
+
+    to {
+        opacity: 1;
+        letter-spacing: 0.34em;
+    }
+}
+
+/* --- Responsive ---------------------------------------------------------- */
+
+/* Narrow phones: buy the headline a little more room. */
+@media (max-width: 400px) {
+    .container {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+    }
+}
+
 @media (min-width: 768px) {
     .buttons {
         flex-direction: row;
+        justify-content: center;
+        gap: 1rem;
+    }
+
+    .button {
+        width: auto;
+    }
+}
+
+/* Landscape phones: very little vertical room, so tighten everything and
+   put the buttons side by side regardless of width. */
+@media (max-height: 520px) and (orientation: landscape) {
+    h1 {
+        font-size: clamp(1.9rem, 6.4vh, 2.6rem);
+        margin-bottom: 0.35rem;
+    }
+
+    .subtitle {
+        font-size: 0.9rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .claims {
+        margin-bottom: 1.1rem;
+    }
+
+    .buttons {
+        flex-direction: row;
+        justify-content: center;
+        gap: 0.75rem;
+    }
+
+    .button {
+        width: auto;
+        min-height: 46px;
+        padding: 0 22px;
+    }
+
+    .hint {
+        display: none;
+    }
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
     }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .button {
+    .js #background-canvas,
+    .js #background-canvas-depth {
+        opacity: 1;
         transition: none;
     }
 
-    .button:hover {
-        transform: none;
+    /* No motion left in the reveal — the content simply appears. */
+    .js.is-ready .reveal,
+    .js.is-ready .buttons.reveal {
+        animation: fade-in 0.4s ease both;
+        animation-delay: 0s;
+    }
+
+    .js.is-ready .hint-inner {
+        animation: none;
+    }
+
+    /* The camera never runs, so nothing needs a compositor layer. */
+    #content-backdrop,
+    .container {
+        will-change: auto;
+    }
+
+    .button {
+        transition: none;
     }
 }
