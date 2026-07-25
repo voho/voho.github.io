@@ -1,5 +1,6 @@
 // config.js
-// All tuning knobs for the background network simulation.
+// All tuning knobs for the background network simulation and the page
+// choreography around it.
 
 export const config = {
     // --- Layout ------------------------------------------------------------
@@ -154,6 +155,10 @@ export const config = {
     ],
 
     // --- Camera: pointer parallax + sway + continuous slow rotation -------------------
+    // The camera moves the field only. The centre block — text, buttons and
+    // the shade behind them — is deliberately fixed: it is the one still
+    // thing to read against everything else drifting, and anything that
+    // nudges it can resize the document and jolt the whole page.
     PARALLAX_PX: 8,            // px of shift when the cursor reaches a screen edge
     PARALLAX_EASE: 3,          // lerp speed, 1/s
     SWAY_AMP: 5,               // px of slow always-on camera sway
@@ -180,19 +185,16 @@ export const config = {
     TILT_RANGE_DEG: 22,        // tilt that reaches full parallax
     TILT_RECENTER: 0.004,      // per-event drift of the neutral pose, so it never pins
 
-    // --- Content parallax (the text floats against the field) -------------------------
-    CONTENT_PARALLAX: -0.4,    // content counter-moves; negative = towards the viewer
-    BACKDROP_PARALLAX: 1.5,
+    // --- Page choreography ------------------------------------------------------------
+    FONT_WAIT_MS: 900,         // how long the reveal waits for the webfont
+    BUTTON_FLARE_COUNT: 4,     // signals sent out of the mesh behind a hovered button
+    BUTTON_FLARE_COOLDOWN_MS: 3000,
+    HINT_TIMEOUT_MS: 9000,     // the interaction hint leaves on its own after this
+    RESIZE_REBUILD_MS: 180,    // debounce before rebuilding the mesh at a new size
+    ORIENTATION_REBUILD_MS: 250,
 
-    // --- Magnetic buttons (fine pointers only) ----------------------------------------
-    MAGNET_RADIUS: 130,
-    MAGNET_PULL: 0.22,         // fraction of the cursor distance the button travels
-    MAGNET_MAX: 9,             // px
-    MAGNET_EASE: 9,            // lerp speed, 1/s
-
-    MAX_DPR: 2,
-
-    // --- Quality governor ---------------------------------------------------------------
+    // --- Quality ------------------------------------------------------------------------
+    MAX_DPR: 2,                // cap on the device pixel ratio the canvases render at
     // The scene degrades once, in steps, if a device cannot hold the frame
     // rate. It never upgrades again, so quality cannot oscillate.
     QUALITY_SAMPLE_S: 2,       // length of an fps sample window
