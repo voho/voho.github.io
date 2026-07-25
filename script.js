@@ -14,7 +14,6 @@ const depthCanvas = document.getElementById('background-canvas-depth');
 const mainCtx = mainCanvas.getContext('2d');
 const depthCtx = depthCanvas.getContext('2d');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-const finePointer = window.matchMedia('(hover: hover) and (pointer: fine)');
 
 const view = {
     w: 0,
@@ -93,7 +92,6 @@ function rebuild() {
         });
     }
     applyQuality();
-    measureButtons();
     if (reducedMotion.matches) renderBoth();
 }
 
@@ -102,96 +100,11 @@ function onResize() {
     // The canvases are sized with 100lvh, so mobile browser bars toggling the
     // window height do not change them; only genuine size changes get through.
     if (mainCanvas.clientWidth === view.w && mainCanvas.clientHeight === view.h
-        && dpr === view.dpr) {
-        measureButtons();
-        return;
-    }
+        && dpr === view.dpr) return;
     fitCanvases();
     if (simMain && !reducedMotion.matches) renderBoth();
     clearTimeout(rebuildTimer);
-    rebuildTimer = setTimeout(rebuild, 180);
-}
-
-// --- Content parallax ------------------------------------------------------
-// The text and the glow behind it drift against the camera, which separates
-// them from the field instead of pasting them onto it.
-
-let lastFgX = NaN;
-let lastFgY = NaN;
-
-function writeParallax() {
-    const fx = view.offset.x * config.CONTENT_PARALLAX;
-    const fy = view.offset.y * config.CONTENT_PARALLAX;
-    if (Math.abs(fx - lastFgX) + Math.abs(fy - lastFgY) < 0.06) return;
-    lastFgX = fx;
-    lastFgY = fy;
-    const bx = view.offset.x * config.BACKDROP_PARALLAX;
-    const by = view.offset.y * config.BACKDROP_PARALLAX;
-    root.style.setProperty('--fg-x', `${fx.toFixed(2)}px`);
-    root.style.setProperty('--fg-y', `${fy.toFixed(2)}px`);
-    root.style.setProperty('--bd-x', `${bx.toFixed(2)}px`);
-    root.style.setProperty('--bd-y', `${by.toFixed(2)}px`);
-}
-
-// The loop is what returns these to zero, so anything that stops the loop
-// has to centre them itself or the content stays where it last drifted.
-function centreContent() {
-    lastFgX = NaN;
-    lastFgY = NaN;
-    for (const name of ['--fg-x', '--fg-y', '--bd-x', '--bd-y']) {
-        root.style.setProperty(name, '0px');
-    }
-    for (const b of buttons) {
-        b.x = 0;
-        b.y = 0;
-        b.wx = 0;
-        b.wy = 0;
-        b.el.style.setProperty('--mx', '0px');
-        b.el.style.setProperty('--my', '0px');
-    }
-}
-
-// --- Magnetic buttons ------------------------------------------------------
-// On fine pointers the buttons lean towards the cursor as it approaches.
-
-const buttons = [...document.querySelectorAll('.button')].map(el => ({
-    el, cx: 0, cy: 0, x: 0, y: 0, wx: NaN, wy: NaN,
-}));
-
-function measureButtons() {
-    for (const b of buttons) {
-        const r = b.el.getBoundingClientRect();
-        b.cx = r.left + r.width / 2;
-        b.cy = r.top + r.height / 2;
-    }
-}
-
-function updateMagnets(dt) {
-    if (!finePointer.matches || reducedMotion.matches) return;
-    const ease = Math.min(1, config.MAGNET_EASE * dt);
-    const R = config.MAGNET_RADIUS;
-    for (const b of buttons) {
-        let tx = 0, ty = 0;
-        if (view.pointer.strength > 0.01) {
-            const dx = view.pointer.x - b.cx, dy = view.pointer.y - b.cy;
-            const d = Math.hypot(dx, dy);
-            if (d < R) {
-                // Zero pull at the centre (no direction to lean towards) and
-                // at the edge of the field: strongest just off the button.
-                const k = config.MAGNET_PULL * (1 - d / R) * view.pointer.strength;
-                const scale = Math.min(1, config.MAGNET_MAX / Math.max(1, d * k));
-                tx = dx * k * scale;
-                ty = dy * k * scale;
-            }
-        }
-        b.x += (tx - b.x) * ease;
-        b.y += (ty - b.y) * ease;
-        if (Math.abs(b.x - b.wx) + Math.abs(b.y - b.wy) < 0.03) continue;
-        b.wx = b.x;
-        b.wy = b.y;
-        b.el.style.setProperty('--mx', `${b.x.toFixed(2)}px`);
-        b.el.style.setProperty('--my', `${b.y.toFixed(2)}px`);
-    }
+    rebuildTimer = setTimeout(rebuild, config.RESIZE_REBUILD_MS);
 }
 
 // --- Quality governor ------------------------------------------------------
@@ -254,9 +167,6 @@ function frame(now) {
     view.offset.y = view.parallax.y * config.PARALLAX_PX
         + Math.sin(TAU_SWAY * 0.8 * elapsed + 2.3) * config.SWAY_AMP * 0.7;
     view.rot = (ROT_SPEED * elapsed) % (Math.PI * 2);
-
-    writeParallax();
-    updateMagnets(dt);
 
     simMain.update(dt);
     simDepth.update(dt);
@@ -358,29 +268,29 @@ window.addEventListener('deviceorientation', (ev) => {
 }, { passive: true });
 
 // Hovering (or keyboard-focusing) a button pushes flares out of the mesh
-// right behind it, at most once every three seconds.
+// right behind it. The button itself stays put — only the field reacts.
 let lastButtonFlares = -Infinity;
 const fireButtonFlares = (ev) => {
     if (reducedMotion.matches || !simMain) return;
     const now = performance.now();
-    if (now - lastButtonFlares < 3000) return;
+    if (now - lastButtonFlares < config.BUTTON_FLARE_COOLDOWN_MS) return;
     lastButtonFlares = now;
     const r = ev.currentTarget.getBoundingClientRect();
     const p = screenToLayer(view, config.OFFSET_MAIN, config.ROT_MAIN,
         r.left + r.width / 2, r.top + r.height / 2);
-    simMain.fireFlares(4, p.x, p.y);
+    simMain.fireFlares(config.BUTTON_FLARE_COUNT, p.x, p.y);
 };
-for (const { el } of buttons) {
-    el.addEventListener('pointerenter', fireButtonFlares);
-    el.addEventListener('focus', fireButtonFlares);
+for (const button of document.querySelectorAll('.button')) {
+    button.addEventListener('pointerenter', fireButtonFlares);
+    button.addEventListener('focus', fireButtonFlares);
 }
 
-document.documentElement.addEventListener('mouseleave', resetPointer);
+root.addEventListener('mouseleave', resetPointer);
 window.addEventListener('blur', resetPointer);
 window.addEventListener('resize', onResize);
 window.addEventListener('orientationchange', () => {
     clearTimeout(rebuildTimer);
-    rebuildTimer = setTimeout(rebuild, 250);
+    rebuildTimer = setTimeout(rebuild, config.ORIENTATION_REBUILD_MS);
 });
 
 // Nothing to animate for an unseen page; this matters most on phones.
@@ -396,7 +306,6 @@ if (typeof reducedMotion.addEventListener === 'function') {
             view.offset.x = 0;
             view.offset.y = 0;
             view.rot = 0;
-            centreContent();
             renderBoth();
         } else {
             startLoop();
@@ -405,8 +314,9 @@ if (typeof reducedMotion.addEventListener === 'function') {
 }
 
 // --- Load choreography -----------------------------------------------------
-// The mesh switches on with a wave from the centre while the text rises into
-// it. Waiting for the webfont keeps the headline from reflowing mid-reveal.
+// The mesh switches on with a wave from the centre while the text fades and
+// sharpens into place. Waiting for the webfont keeps the headline from
+// reflowing mid-reveal.
 
 let hintTimer = 0;
 
@@ -424,9 +334,7 @@ function reveal() {
     if (!reducedMotion.matches) {
         simMain.ignite(config.IGNITE_DELAY_S);
         simDepth.ignite(config.IGNITE_DEPTH_DELAY_S);
-        // The buttons animate in, so their resting places settle late.
-        setTimeout(measureButtons, 1800);
-        hintTimer = setTimeout(dismissHint, 9000);
+        hintTimer = setTimeout(dismissHint, config.HINT_TIMEOUT_MS);
     } else {
         root.classList.add('hint-done');
     }
@@ -436,4 +344,7 @@ rebuild();
 startLoop();
 
 const fontsReady = document.fonts ? document.fonts.ready : Promise.resolve();
-Promise.race([fontsReady, new Promise(r => setTimeout(r, 900))]).then(reveal);
+Promise.race([
+    fontsReady,
+    new Promise(r => setTimeout(r, config.FONT_WAIT_MS)),
+]).then(reveal);
