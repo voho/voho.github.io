@@ -1,95 +1,78 @@
 // config.js
-// Central tuning knobs for the coupled Navier-Stokes fluid solver, Gray-Scott
-// Turing morphogenesis core, wave PDE, 3D hyperspace starfield, interactions,
-// and quality governor.
+// Central tunables for the relativistic Black Hole background simulation.
 
 export const config = {
-    // --- Navier-Stokes Fluid Grid --------------------------------------------
-    FLUID_TARGET_CELLS: 3800,   // isotropic cell budget across aspect ratios
-    FLUID_MIN_AXIS: 42,
-    FLUID_MAX_ASPECT: 2.2,
-    FLUID_PRESSURE_ITERS: 4,    // warm-started Red-Black SOR passes
-    FLUID_SOR_OMEGA: 1.48,      // successive over-relaxation factor
-    FLUID_VORTICITY: 2.3,       // curl confinement strength
-    FLUID_VEL_DAMP: 0.992,
-    FLUID_DYE_DAMP: 0.986,
-    FLUID_MAX_VEL: 48,
-    FLUID_POINTER_FORCE: 460,
-    FLUID_BURST_FORCE: 26,
-
-    // --- Tapered Fluid Streamlines -------------------------------------------
-    TRACER_COUNT: 2400,
-    TRACER_STREAK_SCALE: 7.5,
-    TRACER_LIFE_MIN: 1.8,
-    TRACER_LIFE_MAX: 4.2,
-
-    // --- 3D Hyperspace Starfield ---------------------------------------------
-    STAR_COUNT: 640,
-    STAR_CRUISE_SPEED: 0.028,   // calm layered drift per second
-    STAR_WARP_BOOST: 8.0,       // load deceleration multiplier
-    STAR_WARP_DECAY: 2.0,
-    STAR_LENS_STRENGTH: 0.05,   // subtle optical bending around core rim
-
-    // --- Turing Morphogenesis + Wave PDE Core --------------------------------
-    TURING_W: 96,
-    TURING_H: 64,
-    GS_DU: 0.16,
-    GS_DV: 0.08,
-    GS_SUBSTEPS: 2,
-    GS_WARMUP_INIT: 165,
-    GS_WARMUP_IGNITE: 55,
-    // Phase-diagram presets steered smoothly by button hover mood
-    GS_F_BASE: 0.037,
-    GS_K_BASE: 0.060,
-    GS_F_LINKEDIN: 0.045,
-    GS_K_LINKEDIN: 0.062,
-    GS_F_SPOTIFY: 0.027,
-    GS_K_SPOTIFY: 0.056,
-    WAVE_C2: 0.18,              // strictly CFL-stable (<= 0.5)
-    WAVE_DAMP: 0.974,
-    WAVE_CLAMP: 1.5,
-
-    // --- 3D Core Projection & Bidirectional Physical Coupling ----------------
-    CORE_SPIN_RAD_S: 0.042,
-    CORE_CAM_Z: 4.35,
-    CORE_CAM_FOV: 1.35,
-    CORE_WORLD_RADIUS: 0.88,
-    CORE_FLUID_RADIUS_FRAC: 0.285,
-    CORE_NARROW_ASPECT: 0.8,
-    CORE_NARROW_SCALE: 1.18,
-    CORE_RIM_EMITTERS: 20,      // Turing limb sampling sites exhaling into fluid
-    CORE_EMIT_FORCE: 20,
-    CORE_EMIT_DYE: 0.56,
-    CORE_TORQUE_GAIN: 0.0014,   // viscous tangential fluid torque -> core spin
-    CORE_SPIN_RESTORE: 1.15,
-    CORE_SPIN_MAX: 0.72,
-    CORE_RIM_NUTRIENT: 0.016,   // rim shear feeds Turing morphogenesis & waves
-
-    // --- Curated Celestial Luxury Palette ------------------------------------
-    PALETTE: [
-        '#4a7dff', '#72d8ff', '#b8e8ff', '#8d6bff',
-        '#c4a6ff', '#5be0d6', '#e8c7a8', '#6898ff',
+    // --- Three Spacetime / Accretion Presets -------------------------------
+    // Hovering links smoothly glides weights and orientation toward 1 or 2,
+    // returning to 0 (M87* Horizon) on leave while keeping sky stars anchored.
+    VARIANTS: [
+        {
+            id: 0,
+            name: 'M87* Horizon',
+            tilt: 1.15,
+            roll: 0.06,
+            spin: 0.22,
+            gm: 5.2,
+            drag: 0.18,
+        },
+        {
+            id: 1,
+            name: 'Gargantua',
+            tilt: 0.16,
+            roll: -0.15,
+            spin: 0.10,
+            gm: 4.8,
+            drag: 0.16,
+        },
+        {
+            id: 2,
+            name: 'Cygnus X-1',
+            tilt: 0.34,
+            roll: 0.24,
+            spin: 0.52,
+            gm: 5.5,
+            drag: 0.20,
+        },
     ],
 
-    // --- Camera / Input / Page Choreography ----------------------------------
+    // --- Camera & Framing ----------------------------------------------------
+    CAM_DIST: 15.2,
+    CAM_FOV: 1.46,
+    NARROW_ASPECT: 0.8,
+    NARROW_CAM_DIST: 17.6,
+    BH_MORPH_RATE: 2.8,
+    PARALLAX_YAW: 0.10,
+    PARALLAX_PITCH: 0.07,
     PARALLAX_EASE: 4.5,
-    TILT_RANGE_DEG: 22,
-    TILT_RECENTER: 0.004,
-    FONT_WAIT_MS: 900,
-    HINT_TIMEOUT_MS: 9000,
-    RESIZE_DEBOUNCE_MS: 180,
-    ORIENTATION_DEBOUNCE_MS: 250,
-    BUTTON_PULSE_COOLDOWN_MS: 900,
 
-    // --- Quality Governor (steps down once if FPS drops below target) --------
+    // --- Relativistic Absorbed Particles (Paczynski-Wiita Potential) ---------
+    MAX_PARTICLES: 1000,
+    PARTICLE_CAPTURE_R: 1.48,
+    PARTICLE_AMBIENT_RATE: 12,
+    PARTICLE_MAX_AGE: 15,
+    CLICK_BURST_COUNT: 28,
+    IGNITE_BURST_COUNT: 64,
+    HOLD_EMIT_RATE: 72,
+    BUTTON_PULSE_COUNT: 12,
+    BUTTON_PULSE_COOLDOWN_MS: 320,
+
+    // --- WebGL2 Geodesic Raymarch & HDR Quality Governor ---------------------
+    BH_MARCH_STEPS: 96,
     MAX_DPR: 1.5,
-    CORE_MARCH_STEPS: 28,
-    QUALITY_SAMPLE_S: 1.5,
-    QUALITY_GRACE_S: 1.8,
-    QUALITY_MIN_FPS: 46,
+    QUALITY_GRACE_S: 2.2,
+    QUALITY_SAMPLE_S: 1.0,
+    QUALITY_MIN_FPS: 44,
     QUALITY_STEPS: [
-        { maxDpr: 1.15, marchSteps: 24, tracers: 1500, gsSubsteps: 2, pressureIters: 4, bloom: true },
-        { maxDpr: 0.88, marchSteps: 20, tracers: 800, gsSubsteps: 1, pressureIters: 3, bloom: false },
-        { maxDpr: 0.72, marchSteps: 18, tracers: 400, gsSubsteps: 1, pressureIters: 3, bloom: false },
+        { bloom: false },
+        { marchSteps: 76, maxDpr: 1.25 },
+        { marchSteps: 60, maxDpr: 1.0, maxParticles: 500 },
     ],
+
+    // --- UI Timing & Device Tilt ---------------------------------------------
+    RESIZE_DEBOUNCE_MS: 180,
+    ORIENTATION_DEBOUNCE_MS: 220,
+    HINT_TIMEOUT_MS: 7500,
+    FONT_WAIT_MS: 650,
+    TILT_RANGE_DEG: 28,
+    TILT_RECENTER: 0.015,
 };

@@ -1,11 +1,12 @@
 // script.js
-// Bootstraps the coupled Navier-Stokes + Turing Core simulation: WebGL2
-// primary renderer with automatic Canvas 2D fallback, pointer/touch/tilt
-// input, button mood hooks, load choreography, FPS quality governor, and
-// reduced-motion handling.
+// Bootstraps the relativistic Black Hole simulation: WebGL2 geodesic raymarch
+// + HDR bloom renderer with automatic Canvas 2D fallback, fixed sky-locked
+// starfield, cursor matter emission & horizon oblivion absorption, link-hover
+// spacetime transitions (M87* -> Gargantua / Cygnus X-1), FPS quality governor,
+// and reduced-motion handling.
 
 import { config } from './config.js';
-import { CoupledSimulation } from './simulation.js';
+import { BlackHoleSimulation } from './simulation.js';
 import { WebGL2Renderer, Canvas2DRenderer } from './renderer.js';
 
 const root = document.documentElement;
@@ -25,10 +26,8 @@ const view = {
 const quality = {
     step: 0,
     maxDpr: config.MAX_DPR,
-    marchSteps: config.CORE_MARCH_STEPS,
-    tracers: config.TRACER_COUNT,
-    gsSubsteps: config.GS_SUBSTEPS,
-    pressureIters: config.FLUID_PRESSURE_ITERS,
+    marchSteps: config.BH_MARCH_STEPS,
+    maxParticles: config.MAX_PARTICLES,
     bloom: true,
 };
 
@@ -78,7 +77,7 @@ function rebuildSim() {
     if (sim) {
         sim.resize(view.w, view.h);
     } else {
-        sim = new CoupledSimulation(view.w, view.h);
+        sim = new BlackHoleSimulation(view.w, view.h);
     }
     if (reducedMotion.matches) renderOnce();
 }
@@ -104,9 +103,7 @@ let qAcc = 0;
 function degrade() {
     const step = config.QUALITY_STEPS[quality.step++];
     if (step.marchSteps) quality.marchSteps = step.marchSteps;
-    if (step.tracers) quality.tracers = step.tracers;
-    if (step.gsSubsteps) quality.gsSubsteps = step.gsSubsteps;
-    if (step.pressureIters) quality.pressureIters = step.pressureIters;
+    if (step.maxParticles) quality.maxParticles = step.maxParticles;
     if (typeof step.bloom === 'boolean') quality.bloom = step.bloom;
     if (step.maxDpr) {
         quality.maxDpr = step.maxDpr;
@@ -181,7 +178,7 @@ function aimPointer(clientX, clientY) {
     view.parallax.ty = (ny - 0.5) * 2;
 
     if (sim && !reducedMotion.matches) {
-        sim.pointerMove(nx, ny, vx, vy);
+        sim.pointerMove(nx, ny, vx, vy, sim.pointer.down);
     }
 }
 
@@ -190,6 +187,7 @@ const resetPointer = () => {
     view.pointer.targetStrength = 0;
     view.parallax.tx = 0;
     view.parallax.ty = 0;
+    if (sim) sim.pointer.down = false;
 };
 
 window.addEventListener('pointermove', (ev) => {
@@ -213,10 +211,17 @@ window.addEventListener('pointerdown', (ev) => {
     dismissHint();
     if (reducedMotion.matches || !sim) return;
     if (ev.target && ev.target.closest && ev.target.closest('a, button')) return;
+    sim.pointer.down = true;
     const nx = Math.max(0, Math.min(1, ev.clientX / Math.max(1, view.w)));
     const ny = Math.max(0, Math.min(1, ev.clientY / Math.max(1, view.h)));
-    sim.interactAt(nx, ny, sim.targetMood);
+    sim.interactAt(nx, ny);
 }, { passive: true });
+
+const releaseHold = () => {
+    if (sim) sim.pointer.down = false;
+};
+window.addEventListener('pointerup', releaseHold, { passive: true });
+window.addEventListener('pointercancel', releaseHold, { passive: true });
 
 let tiltBase = null;
 window.addEventListener('deviceorientation', (ev) => {
@@ -238,16 +243,18 @@ window.addEventListener('deviceorientation', (ev) => {
 }, { passive: true });
 
 let lastButtonPulse = -Infinity;
-for (const button of document.querySelectorAll('.button')) {
-    button.addEventListener('pointermove', (ev) => {
-        const r = button.getBoundingClientRect();
-        button.style.setProperty('--mx', `${ev.clientX - r.left}px`);
-        button.style.setProperty('--my', `${ev.clientY - r.top}px`);
-    }, { passive: true });
+for (const el of document.querySelectorAll('[data-mood]')) {
+    if (el.classList.contains('button')) {
+        el.addEventListener('pointermove', (ev) => {
+            const r = el.getBoundingClientRect();
+            el.style.setProperty('--mx', `${ev.clientX - r.left}px`);
+            el.style.setProperty('--my', `${ev.clientY - r.top}px`);
+        }, { passive: true });
+    }
 
+    const mood = Number(el.dataset.mood || 0);
     const onEnter = (ev) => {
         if (!sim || reducedMotion.matches) return;
-        const mood = Number(ev.currentTarget.dataset.mood || 0);
         sim.targetMood = mood;
         const now = performance.now();
         if (now - lastButtonPulse < config.BUTTON_PULSE_COOLDOWN_MS) return;
@@ -255,17 +262,17 @@ for (const button of document.querySelectorAll('.button')) {
         const r = ev.currentTarget.getBoundingClientRect();
         const nx = (r.left + r.width / 2) / Math.max(1, view.w);
         const ny = (r.top + r.height / 2) / Math.max(1, view.h);
-        sim.buttonHoverPulse(nx, ny, mood);
+        sim.buttonHoverPulse(nx, ny);
     };
 
     const onLeave = () => {
-        if (sim) sim.targetMood = 0;
+        if (sim && sim.targetMood === mood) sim.targetMood = 0;
     };
 
-    button.addEventListener('pointerenter', onEnter);
-    button.addEventListener('focus', onEnter);
-    button.addEventListener('pointerleave', onLeave);
-    button.addEventListener('blur', onLeave);
+    el.addEventListener('pointerenter', onEnter);
+    el.addEventListener('focus', onEnter);
+    el.addEventListener('pointerleave', onLeave);
+    el.addEventListener('blur', onLeave);
 }
 
 root.addEventListener('mouseleave', resetPointer);
@@ -338,7 +345,7 @@ function reveal() {
 c2dRenderer = new Canvas2DRenderer(c2dCanvas);
 glRenderer = new WebGL2Renderer(glCanvas);
 fitCanvases();
-sim = new CoupledSimulation(view.w, view.h);
+sim = new BlackHoleSimulation(view.w, view.h);
 const glReady = glRenderer.init(sim);
 setBackend(glReady);
 fitCanvases();
