@@ -13,7 +13,6 @@ export const config = {
     FLUID_VEL_DAMP: 0.992,
     FLUID_DYE_DAMP: 0.986,
     FLUID_MAX_VEL: 48,
-    FLUID_AMBIENT_FORCE: 17,
     FLUID_POINTER_FORCE: 460,
     FLUID_BURST_FORCE: 28,
 
@@ -41,7 +40,7 @@ export const config = {
     WAVE_DAMP: 0.974,
     WAVE_CLAMP: 1.5,
 
-    // --- 3D Core Projection & Solid-Body Coupling ----------------------------
+    // --- 3D Core Projection & Bidirectional Physical Coupling ----------------
     CORE_SPIN_RAD_S: 0.15,
     CORE_CAM_Z: 4.35,
     CORE_CAM_FOV: 1.35,
@@ -49,6 +48,13 @@ export const config = {
     CORE_FLUID_RADIUS_FRAC: 0.285,
     CORE_NARROW_ASPECT: 0.8,
     CORE_NARROW_SCALE: 1.18,
+    CORE_RIM_EMITTERS: 20,      // Turing limb sampling sites exhaling into fluid
+    CORE_EMIT_FORCE: 24,
+    CORE_EMIT_DYE: 0.72,
+    CORE_TORQUE_GAIN: 0.0028,   // viscous tangential fluid torque -> core spin
+    CORE_SPIN_RESTORE: 0.85,
+    CORE_SPIN_MAX: 1.85,
+    CORE_RIM_NUTRIENT: 0.016,   // rim shear feeds Turing morphogenesis & waves
 
     // --- Palette (shared by fluid plumes, tracers and bursts) ----------------
     PALETTE: [

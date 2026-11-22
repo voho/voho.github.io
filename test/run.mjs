@@ -54,6 +54,52 @@ for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
         kindFluid === 'fluid' && outerEnergy > 40);
 }
 
+// --- 2b. Morphogenetic Core -> Fluid emission & Fluid -> Core viscous torque
+{
+    const sim = new CoupledSimulation(1440, 900);
+    sim.u.fill(0); sim.v.fill(0);
+    sim.dr.fill(0); sim.dg.fill(0); sim.db.fill(0);
+    for (let i = 0; i < 12; i++) sim.update(0.016);
+    let velEnergy = 0;
+    let dyeEnergy = 0;
+    for (let i = 0; i < sim.u.length; i++) {
+        velEnergy += Math.hypot(sim.u[i], sim.v[i]);
+        dyeEnergy += sim.dr[i] + sim.dg[i] + sim.db[i];
+    }
+    check(`Turing core autonomously exhales fluid + dye (vel=${velEnergy.toFixed(1)}, dye=${dyeEnergy.toFixed(1)})`,
+        velEnergy > 15 && dyeEnergy > 1);
+
+    const injectSwirl = (s, dir) => {
+        const minDim = Math.min(s.width, s.height);
+        const rimR = s.coreScreenRadiusFrac * 1.0;
+        for (let k = 0; k < 12; k++) {
+            const a = (k / 12) * Math.PI * 2;
+            const nx = 0.5 + (Math.cos(a) * rimR * minDim) / s.width;
+            const ny = 0.5 - (Math.sin(a) * rimR * minDim) / s.height;
+            const gx = nx * (s.gw - 2) + 1;
+            const gy = (1 - ny) * (s.gh - 2) + 1;
+            s.splatFluid(gx, gy, 3.2, -Math.sin(a) * 18 * dir, Math.cos(a) * 18 * dir, 0, 0, 0);
+        }
+    };
+
+    const ccw = new CoupledSimulation(1440, 900);
+    for (let step = 0; step < 20; step++) {
+        injectSwirl(ccw, 1);
+        ccw.update(0.016);
+    }
+    const ccwSpin = ccw.coreSpinVel;
+
+    const cw = new CoupledSimulation(1440, 900);
+    for (let step = 0; step < 20; step++) {
+        injectSwirl(cw, -1);
+        cw.update(0.016);
+    }
+    const cwSpin = cw.coreSpinVel;
+
+    check(`fluid torque accelerates & reverses core spin (CCW=${ccwSpin.toFixed(3)} > base=${config.CORE_SPIN_RAD_S} > CW=${cwSpin.toFixed(3)})`,
+        ccwSpin > config.CORE_SPIN_RAD_S + 0.08 && cwSpin < config.CORE_SPIN_RAD_S - 0.08);
+}
+
 // --- 3. Phase-diagram mood steering -----------------------------------------
 {
     const sim = new CoupledSimulation(1440, 900);

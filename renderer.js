@@ -192,16 +192,29 @@ void main() {
     float moodPhase = uMood.x * 0.18 - uMood.y * 0.28;
     vec3 irid = thinFilm(1.0 - ndv + morph * 0.45 + dot(N, L1) * 0.2, uTime * 0.05 + moodPhase);
 
+    // Chromatic glass refraction of Stokes currents through the obsidian limb
+    vec2 refrOffset = N.xy * 0.16;
+    vec2 disp = N.xy * 0.016;
+    float refrR = texture(uFluidTex, clamp(vUv - refrOffset + disp, 0.02, 0.98)).r;
+    float refrG = texture(uFluidTex, clamp(vUv - refrOffset, 0.02, 0.98)).g;
+    float refrB = texture(uFluidTex, clamp(vUv - refrOffset - disp, 0.02, 0.98)).b;
+    vec3 fluidRefr = vec3(refrR, refrG, refrB);
+
     vec2 reflUv = clamp(vUv + N.xy * 0.22, 0.02, 0.98);
     vec3 fluidRefl = texture(uFluidTex, reflUv).rgb;
+    vec3 mist = texture(uFluidTex, vUv).rgb;
 
-    col = vec3(0.013, 0.019, 0.040);
-    col += irid * fresnel * 1.05;
-    col += fluidRefl * (0.28 + 0.72 * fresnel) * 0.85;
-    float vein = smoothstep(0.28, 0.88, morph) * 0.20 + ridge * 0.26 + wave * 0.32;
-    col += irid * vein * (0.35 + 0.65 * fresnel);
+    col = vec3(0.012, 0.018, 0.038);
+    col += irid * fresnel * 0.95;
+    col += fluidRefr * (0.14 + 0.86 * fresnel) * 0.65;
+    col += fluidRefl * (0.25 + 0.75 * fresnel) * 0.85;
+    float vein = smoothstep(0.28, 0.88, morph) * 0.22 + ridge * 0.28 + wave * 0.34;
+    vec3 veinTint = mix(irid, irid * 0.6 + fluidRefl * 0.9, 0.45);
+    col += veinTint * vein * (0.35 + 0.65 * fresnel);
     col += mix(vec3(0.48, 0.84, 1.0), irid, 0.5) * spec1 * (1.1 + 0.3 * uPointerStrength);
     col += mix(vec3(0.75, 0.42, 1.0), vec3(0.20, 0.92, 0.72), uMood.y) * spec2 * 0.55;
+    // Delicate translucent Stokes mist veil across grazing limb (center stays dark & readable)
+    col += mist * (0.04 + 0.32 * fresnel);
   } else {
     col = mix(vec3(0.015, 0.022, 0.048), vec3(0.032, 0.054, 0.112), 1.0 - clamp(vUv.y, 0.0, 1.0));
     float stars = starField(uv + uParallax * 0.015 + uTime * 0.0022, 10.5);
@@ -212,7 +225,8 @@ void main() {
     col += fluidCol * 1.08 * centerGuard;
     col += moodAura * exp(-dot(uv, uv) * 2.4) * 0.14;
     if (h > 0.0) {
-      col += moodAura * exp(-max(0.0, minD) * 7.5) * 0.28;
+      float sheath = exp(-max(0.0, minD) * 8.5);
+      col += (moodAura * 0.28 + fluidCol * 0.45) * sheath;
     }
   }
 
@@ -378,15 +392,23 @@ export class WebGL2Renderer {
         return true;
     }
 
-    _updateCoreRot(t) {
-        const a = t * config.CORE_SPIN_RAD_S;
-        const b = Math.sin(t * 0.11) * 0.14;
+    _updateCoreRot(coreAngle, t, tiltX, tiltY) {
+        const a = coreAngle;
+        const b = Math.sin(t * 0.11) * 0.12 + tiltX;
+        const c = tiltY;
         const ca = Math.cos(a), sa = Math.sin(a);
         const cb = Math.cos(b), sb = Math.sin(b);
+        const cc = Math.cos(c), sc = Math.sin(c);
         const m = this.coreRot;
-        m[0] = ca * cb;  m[1] = ca * sb;  m[2] = sa;
-        m[3] = -sb;      m[4] = cb;       m[5] = 0;
-        m[6] = -sa * cb; m[7] = -sa * sb; m[8] = ca;
+        m[0] = ca * cb;
+        m[1] = cc * ca * sb - sc * sa;
+        m[2] = sc * ca * sb + cc * sa;
+        m[3] = -sb;
+        m[4] = cc * cb;
+        m[5] = sc * cb;
+        m[6] = -sa * cb;
+        m[7] = -cc * sa * sb - sc * ca;
+        m[8] = -sc * sa * sb + cc * ca;
     }
 
     render(sim, view, quality) {
@@ -411,7 +433,7 @@ export class WebGL2Renderer {
         gl.bindTexture(gl.TEXTURE_2D, this.simTex);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, sim.tw, sim.th, gl.RGBA, gl.UNSIGNED_BYTE, sim.turingTexBytes);
 
-        this._updateCoreRot(sim.time);
+        this._updateCoreRot(sim.coreAngle, sim.time, sim.coreTiltX, sim.coreTiltY);
 
         const m = this.mainProg;
         gl.useProgram(m.program);
@@ -557,8 +579,9 @@ export class Canvas2DRenderer {
         const cx = w * 0.5 - view.parallax.x * 8;
         const cy = h * 0.5 + view.parallax.y * 8;
 
-        const aura = ctx.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.65);
-        aura.addColorStop(0, sim.wSpotify > 0.3 ? 'rgba(32, 224, 176, 0.18)' : 'rgba(89, 215, 255, 0.18)');
+        const aura = ctx.createRadialGradient(cx, cy, R * 0.55, cx, cy, R * 1.75);
+        aura.addColorStop(0, sim.wSpotify > 0.3 ? 'rgba(32, 224, 176, 0.24)' : 'rgba(89, 215, 255, 0.24)');
+        aura.addColorStop(0.55, 'rgba(130, 110, 255, 0.10)');
         aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
         ctx.fillStyle = aura;
         ctx.fillRect(0, 0, w, h);
@@ -569,7 +592,7 @@ export class Canvas2DRenderer {
         const lutGy = this.lutGy, lutFres = this.lutFres;
         const gsV = sim.gsV, waveH = sim.waveH;
         const tw = sim.tw;
-        const a = -sim.time * config.CORE_SPIN_RAD_S;
+        const a = -sim.coreAngle;
         const cosA = Math.cos(a), sinA = Math.sin(a);
         const spotBoost = sim.wSpotify * 0.35;
         const invTau = 1 / TAU;

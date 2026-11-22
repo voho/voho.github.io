@@ -43,6 +43,10 @@ export class CoupledSimulation {
         this.gSize = 0;
         this.coreScale = 1;
         this.coreScreenRadiusFrac = config.CORE_FLUID_RADIUS_FRAC;
+        this.coreAngle = 0;
+        this.coreSpinVel = config.CORE_SPIN_RAD_S;
+        this.coreTiltX = 0;
+        this.coreTiltY = 0;
 
         this.wLinkedIn = 0;
         this.wSpotify = 0;
@@ -145,6 +149,10 @@ export class CoupledSimulation {
 
     seed(turingWarmup = config.GS_WARMUP_INIT) {
         this.igniteT = 0;
+        this.coreAngle = 0;
+        this.coreSpinVel = config.CORE_SPIN_RAD_S;
+        this.coreTiltX = 0;
+        this.coreTiltY = 0;
         this.u.fill(0); this.v.fill(0);
         this.u0.fill(0); this.v0.fill(0);
         this.p.fill(0); this.div.fill(0); this.curl.fill(0);
@@ -210,7 +218,7 @@ export class CoupledSimulation {
         if (r2 > 0.98) return null;
         const sz = Math.sqrt(Math.max(0, 1 - r2));
 
-        const a = -this.time * config.CORE_SPIN_RAD_S;
+        const a = -this.coreAngle;
         const cosA = Math.cos(a), sinA = Math.sin(a);
         const rx = sx * cosA - sz * sinA;
         const rz = sx * sinA + sz * cosA;
@@ -256,14 +264,16 @@ export class CoupledSimulation {
         const x1 = Math.min(gw - 2, Math.ceil(gx + rad));
         const y0 = Math.max(1, Math.floor(gy - rad));
         const y1 = Math.min(gh - 2, Math.ceil(gy + rad));
-        const invR2 = 2.2 / Math.max(0.5, rad * rad);
+        const invR2 = 1 / Math.max(0.5, rad * rad);
         for (let j = y0; j <= y1; j++) {
             const dy = j - gy;
             const dy2 = dy * dy;
             const row = j * gw;
             for (let i = x0; i <= x1; i++) {
                 const dx = i - gx;
-                const w = Math.exp(-(dx * dx + dy2) * invR2);
+                const q = 1 - (dx * dx + dy2) * invR2;
+                if (q <= 0) continue;
+                const w = q * q;
                 const idx = row + i;
                 u[idx] += fx * w;
                 v[idx] += fy * w;
@@ -461,7 +471,10 @@ export class CoupledSimulation {
         const invR = 1 / coreR;
         const innerR2 = (coreR * 0.85) ** 2;
         const outerR2 = (coreR * 1.12) ** 2;
-        const spinOffset = this.time * config.CORE_SPIN_RAD_S;
+        const spinOffset = this.coreAngle;
+        let torque = 0;
+        let shearX = 0;
+        let shearY = 0;
 
         for (let j = 1; j < gh - 1; j++) {
             const sy = ((j + 0.5) / gh - 0.5) * scaleY;
@@ -480,16 +493,21 @@ export class CoupledSimulation {
                     dg[idx] *= 0.78;
                     db[idx] *= 0.78;
                 } else {
+                    const ux = u[idx], vy = v[idx];
+                    torque += sx * vy - sy * ux;
+                    shearX += ux;
+                    shearY += vy;
+
                     const len = Math.sqrt(d2) + 1e-5;
                     const nx = sx / len, ny = sy / len;
-                    const vn = u[idx] * nx + v[idx] * ny;
+                    const vn = ux * nx + vy * ny;
                     if (vn < 0) {
                         u[idx] -= vn * nx * 0.9;
                         v[idx] -= vn * ny * 0.9;
                     }
                     if (coupleWaves && ((i + j) & 1) === 0) {
-                        const speed2 = u[idx] * u[idx] + v[idx] * v[idx];
-                        if (speed2 > 72.25) {
+                        const speed2 = ux * ux + vy * vy;
+                        if (speed2 > 56) {
                             const speed = Math.sqrt(speed2);
                             const az = Math.atan2(0.2, sx * invR) - spinOffset;
                             const su = ((az / TAU + 0.5) % 1 + 1) % 1;
@@ -497,13 +515,32 @@ export class CoupledSimulation {
                             const gx = ((su * this.tw) | 0) % this.tw;
                             const gy = clamp((sv * this.th) | 0, 1, this.th - 2);
                             const wIdx = gy * this.tw + gx;
-                            const ripple = Math.min(0.04, (speed - 8.5) * 0.0022 * dt * 60);
+                            const excess = speed - 7.48;
+                            const ripple = Math.min(0.045, excess * 0.0024 * dt * 60);
                             const wh = this.waveH[wIdx] + ripple;
                             this.waveH[wIdx] = wh > config.WAVE_CLAMP ? config.WAVE_CLAMP : wh;
+
+                            // Rim fluid shear feeds morphogen nutrient into Turing pattern
+                            const nutrient = config.CORE_RIM_NUTRIENT * Math.min(1, excess * 0.08) * dt * 60;
+                            const nv = this.gsV[wIdx] + nutrient;
+                            const nu = this.gsU[wIdx] - nutrient * 0.5;
+                            this.gsV[wIdx] = nv > 1 ? 1 : nv;
+                            this.gsU[wIdx] = nu < 0 ? 0 : nu;
                         }
                     }
                 }
             }
+        }
+
+        if (coupleWaves) {
+            this.coreSpinVel += (torque * config.CORE_TORQUE_GAIN
+                + (config.CORE_SPIN_RAD_S - this.coreSpinVel) * config.CORE_SPIN_RESTORE) * dt;
+            this.coreSpinVel = clamp(this.coreSpinVel, -config.CORE_SPIN_MAX, config.CORE_SPIN_MAX);
+            this.coreAngle += this.coreSpinVel * dt;
+
+            const tiltRate = Math.min(1, dt * 3.5);
+            this.coreTiltX += (clamp(shearY * 0.00018, -0.22, 0.22) - this.coreTiltX) * tiltRate;
+            this.coreTiltY += (clamp(shearX * 0.00018, -0.22, 0.22) - this.coreTiltY) * tiltRate;
         }
     }
 
@@ -588,23 +625,75 @@ export class CoupledSimulation {
         return count > 0 ? sum / count : 0;
     }
 
+    _emitFromTuringLimb(sdt) {
+        const n = config.CORE_RIM_EMITTERS;
+        const minDim = Math.min(this.width, this.height);
+        const rimR = this.coreScreenRadiusFrac * 1.07;
+        const cosA = Math.cos(this.coreAngle);
+        const sinA = Math.sin(this.coreAngle);
+        const tw = this.tw, th = this.th;
+        const gw = this.gw, gh = this.gh;
+        const swirlDir = this.coreSpinVel >= 0 ? 1 : -1;
+        const invTau = 1 / TAU;
+        const invPi = 1 / Math.PI;
+        const zRim = 0.2;
+
+        for (let k = 0; k < n; k++) {
+            const ang = (k / n) * TAU;
+            const cosK = Math.cos(ang), sinK = Math.sin(ang);
+            const rx = cosK * cosA - zRim * sinA;
+            const rz = cosK * sinA + zRim * cosA;
+            const su = ((Math.atan2(rz, rx) * invTau + 0.5) % 1 + 1) % 1;
+            const sv = Math.acos(clamp(sinK, -0.96, 0.96)) * invPi;
+            const gxT = Math.min(tw - 1, (su * tw) | 0);
+            const gyT = Math.min(th - 1, (sv * th) | 0);
+            const tIdx = gyT * tw + gxT;
+
+            const morph = this.gsV[tIdx];
+            const wAbs = this.waveH[tIdx] < 0 ? -this.waveH[tIdx] : this.waveH[tIdx];
+            const act = morph + wAbs * 1.4 - 0.16;
+            if (act <= 0) continue;
+
+            const str = Math.min(1.0, act * 1.8) * sdt * 8.0;
+            const nx = 0.5 + (cosK * rimR * minDim) / this.width;
+            const ny = 0.5 - (sinK * rimR * minDim) / this.height;
+            const gx = clamp(nx, 0.04, 0.96) * (gw - 2) + 1;
+            const gy = clamp(1 - ny, 0.04, 0.96) * (gh - 2) + 1;
+
+            const fMag = config.CORE_EMIT_FORCE * str;
+            const fx = (cosK * 0.85 - sinK * 0.35 * swirlDir) * fMag;
+            const fy = (sinK * 0.85 + cosK * 0.35 * swirlDir) * fMag;
+
+            const phase = ang + morph * 2.4 + this.time * 0.12;
+            let cr = 0.54 + 0.44 * Math.cos(phase + 0.2);
+            let cg = 0.54 + 0.44 * Math.cos(phase + 2.3);
+            let cb = 0.58 + 0.42 * Math.cos(phase + 4.3);
+            if (this.wLinkedIn > 0.01) {
+                const w = this.wLinkedIn * 0.72;
+                const s = 0.5 + 0.5 * Math.sin(phase);
+                cr += ((0.24 + s * 0.30) - cr) * w;
+                cg += ((0.74 - s * 0.16) - cg) * w;
+                cb += (1.0 - cb) * w;
+            }
+            if (this.wSpotify > 0.01) {
+                const w = this.wSpotify * 0.72;
+                const s = 0.5 + 0.5 * Math.cos(phase);
+                cr += ((0.18 + s * 0.58) - cr) * w;
+                cg += ((0.94 - s * 0.52) - cg) * w;
+                cb += ((0.68 + s * 0.32) - cb) * w;
+            }
+            const dScale = config.CORE_EMIT_DYE * str * 0.42;
+            this.splatFluid(gx, gy, 3.0, fx, fy, cr * dScale, cg * dScale, cb * dScale);
+        }
+    }
+
     stepFluid(dt, pressureIters = config.FLUID_PRESSURE_ITERS, tracerCount = config.TRACER_COUNT, coupleWaves = true) {
         const sdt = Math.min(dt, 0.025);
         const t = this.time;
         const gw = this.gw, gh = this.gh;
 
-        for (let k = 0; k < 2; k++) {
-            const a = t * (k === 0 ? 0.52 : -0.40) + k * Math.PI;
-            const gx = gw * (0.5 + Math.cos(a) * 0.37);
-            const gy = gh * (0.5 + Math.sin(a) * 0.35);
-            const f = config.FLUID_AMBIENT_FORCE * (k === 0 ? 1 : -0.9);
-            const fx = -Math.sin(a) * f * sdt * 8;
-            const fy = Math.cos(a) * f * sdt * 8;
-            const r = k === 0 ? 0.09 + this.wLinkedIn * 0.04 : 0.16 + this.wSpotify * 0.06;
-            const g = k === 0 ? 0.22 + this.wSpotify * 0.14 : 0.12 + this.wSpotify * 0.16;
-            const b = k === 0 ? 0.36 + this.wLinkedIn * 0.14 : 0.34;
-            this.splatFluid(gx, gy, 3.6, fx, fy, r * sdt * 3.8, g * sdt * 3.8, b * sdt * 3.8);
-        }
+        // Morphogenetic fluid emission directly from Turing ridges & waves on the sphere limb
+        this._emitFromTuringLimb(sdt);
 
         if (this.pointer.strength > 0.05 && (Math.abs(this.pointer.vx) > 0.002 || Math.abs(this.pointer.vy) > 0.002)) {
             const gx = this.pointer.x * (gw - 2) + 1;
@@ -646,6 +735,8 @@ export class CoupledSimulation {
         const resetR2 = (coreR * 0.85) ** 2;
         const fadeIn2 = (coreR * 0.88) ** 2;
         const fadeOut2 = (coreR * 1.06) ** 2;
+        const midR2 = (coreR * 1.14) ** 2;
+        const invCoreR2 = 1 / (coreR * coreR);
         const invFadeSpan2 = 1 / Math.max(1e-6, fadeOut2 - fadeIn2);
         const gwM2 = gw - 2, ghM2 = gh - 2;
         const invGwDt = sdt / gw, invGhDt = sdt / gh;
@@ -697,8 +788,10 @@ export class CoupledSimulation {
             const bell = 4 * frac * (1 - frac);
             let coreFade = (dist2 - fadeIn2) * invFadeSpan2;
             if (coreFade < 0) coreFade = 0; else if (coreFade > 1) coreFade = 1;
+            const diff = (dist2 - midR2) * invCoreR2;
+            const sheathBoost = 1 + 0.65 * Math.max(0, 1 - diff * diff * 6.0);
             const spClamp = speed > 1 ? 1 : speed;
-            const alpha = bell * (0.28 + 0.52 * spClamp) * coreFade;
+            const alpha = bell * (0.28 + 0.52 * spClamp) * coreFade * sheathBoost;
 
             const vo = i * 5;
             tracerBuf[vo] = nx;

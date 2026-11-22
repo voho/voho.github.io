@@ -10,10 +10,10 @@ A coupled real-time physics and morphogenesis simulation renders behind a fixed,
 
 - `config.js` — central tuning knobs (Navier-Stokes solver, Gray-Scott & wave PDEs, core coupling, tracers, camera, choreography, quality tiers).
 - `simulation.js` — pure DOM-free `CoupledSimulation` engine combining:
-  - an adaptive isotropic **Navier-Stokes (Stable Fluids)** grid (`∇·u = 0`, vorticity confinement, semi-Lagrangian advection) with solid-body deflection around the central core and thousands of advected **Lagrangian tracers**;
+  - an adaptive isotropic **Navier-Stokes (Stable Fluids)** grid (`∇·u = 0` via Red-Black SOR, vorticity confinement, fused semi-Lagrangian advection) with solid-body deflection around the central core and **3,200** advected **Lagrangian tracers**;
   - a **96×64 Gray-Scott reaction-diffusion PDE** coupled to a **2D damped wave equation** whose morphogen concentrations and waves physically displace the 3D core surface;
-  - bidirectional coupling between the surrounding fluid rim and the core's surface waves.
-- `renderer.js` — `WebGL2Renderer` (single-pass 3D SDF raymarched obsidian core with live Navier-Stokes environment reflections, thin-film optical iridescence, fluid composite, and additive tracers) plus a `Canvas2DRenderer` graceful fallback driven by the same simulation state.
+  - **bidirectional physical coupling**: active Turing ridges & waves on the sphere's limb exhale iridescent filaments directly into the surrounding fluid, while viscous tangential fluid torque spins/tilts the 3D sphere and boundary shear feeds surface waves & morphogen nutrients.
+- `renderer.js` — `WebGL2Renderer` (single-pass 3D SDF raymarched obsidian core with chromatic glass refraction, live Navier-Stokes surface reflections, translucent limb mist veil, thin-film optical iridescence, and additive tracers) plus a `Canvas2DRenderer` graceful fallback driven by the same simulation state.
 - `script.js` — WebGL2 initialization, `webglcontextlost` fallback and recovery, `100lvh`-safe responsive sizing, pointer/touch/tilt parallax, button mood hooks, load ignition choreography, FPS quality governor, and `prefers-reduced-motion` handling.
 
 ## Interaction
@@ -26,7 +26,7 @@ A coupled real-time physics and morphogenesis simulation renders behind a fixed,
 
 ## Graceful degradation & accessibility
 
-1. **WebGL2 (Full)** — 48-step 3D SDF raymarch + 4,200 tracers + `1.5` max DPR.
+1. **WebGL2 (Full)** — 32-step 3D SDF raymarch + 3,200 tracers + `1.5` max DPR.
 2. **Quality Governor** — steps down `maxDpr`, raymarch steps, tracer count, and PDE substeps if FPS drops below threshold.
 3. **Canvas 2D Fallback** — automatically activates when WebGL2 is unavailable or context is lost.
 4. **`prefers-reduced-motion`** — renders a single settled static frame with no animation loop.
@@ -37,4 +37,4 @@ A coupled real-time physics and morphogenesis simulation renders behind a fixed,
 npm test
 ```
 
-Headless Node checks for adaptive fluid sizing, core-to-fluid & wave coupling, mood-driven Gray-Scott phase steering, 120-step soak stability (0 NaNs, low divergence, active morphogenesis), per-frame update budget, and WebGL2 `#version 300 es` shader integrity.
+Headless Node checks for adaptive fluid sizing, morphogenetic core-to-fluid emission, viscous fluid-to-core torque coupling, core/fluid clicks, mood-driven Gray-Scott phase steering, 120-step soak stability (0 NaNs, low divergence, active morphogenesis), `< 1.0 ms/frame` CPU update budget, and WebGL2 `#version 300 es` shader integrity.
