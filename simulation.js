@@ -1,15 +1,16 @@
 // simulation.js
 // Pure, DOM-free coupled procedural simulation:
 //   1. Adaptive incompressible Navier-Stokes (Stable Fluids) Eulerian grid
-//      with SOR pressure projection, fused advection, and core obstacle coupling
+//      with Red-Black SOR pressure projection and core obstacle coupling
 //   2. 96x64 Gray-Scott reaction-diffusion PDE + 2D damped wave PDE
-//   3. Trig-free & sqrt-free Lagrangian tracer advection
+//   3. Velocity-aligned tapered fluid streamlines (tracerLineBuf)
+//   4. 3D perspective hyperspace starfield with gravitational rim lensing
 
 import { config } from './config.js';
 
 const TAU = Math.PI * 2;
-const LINKEDIN_RGB = [0.28, 0.78, 1.0];
-const SPOTIFY_RGB = [0.18, 0.94, 0.68];
+const LINKEDIN_RGB = [0.42, 0.76, 1.0];
+const SPOTIFY_RGB = [0.32, 0.88, 0.82];
 
 const PALETTE_RGB = config.PALETTE.map((hex) => {
     const v = parseInt(hex.slice(1), 16);
@@ -68,16 +69,32 @@ export class CoupledSimulation {
         this.gsF = config.GS_F_BASE;
         this.gsK = config.GS_K_BASE;
 
+        // Tapered fluid streamlines (2 vertices x 5 floats per tracer)
         const maxT = config.TRACER_COUNT;
         this.tx = new Float32Array(maxT);
         this.ty = new Float32Array(maxT);
         this.tAge = new Float32Array(maxT);
         this.tLife = new Float32Array(maxT);
         this.tHue = new Float32Array(maxT);
-        this.tracerBuf = new Float32Array(maxT * 5);
+        this.tracerLineBuf = new Float32Array(maxT * 10);
+
+        // 3D hyperspace flight starfield (3 depth/speed layers: tail streaks + Airy core heads)
+        const maxS = config.STAR_COUNT;
+        this.starX = new Float32Array(maxS);
+        this.starY = new Float32Array(maxS);
+        this.starZ = new Float32Array(maxS);
+        this.starTemp = new Float32Array(maxS);
+        this.starBright = new Float32Array(maxS);
+        this.starLayer = new Uint8Array(maxS);
+        this.starSize = new Float32Array(maxS);
+        this.starPhase = new Float32Array(maxS);
+        this.starSpeed = config.STAR_CRUISE_SPEED;
+        this.starLineBuf = new Float32Array(maxS * 12);
+        this.starPointBuf = new Float32Array(maxS * 7);
 
         this.resize(width, height);
         this._initTracers();
+        this._initStars();
         this.seed(config.GS_WARMUP_INIT);
     }
 
@@ -147,6 +164,40 @@ export class CoupledSimulation {
         }
     }
 
+    _placeStar(i, zVal) {
+        let sx, sy;
+        do {
+            sx = (Math.random() - 0.5) * 2.2;
+            sy = (Math.random() - 0.5) * 1.8;
+        } while (sx * sx + sy * sy < 0.01);
+        this.starX[i] = sx;
+        this.starY[i] = sy;
+        this.starZ[i] = zVal;
+        this.starTemp[i] = Math.random();
+
+        // 3 depth/speed layers: 50% distant (0.38x), 34% mid (1.0x), 16% near (1.95x)
+        const lr = Math.random();
+        const layer = lr < 0.50 ? 0 : lr < 0.84 ? 1 : 2;
+        this.starLayer[i] = layer;
+
+        // Astronomical power-law magnitude distribution (~8% luminous hero stars)
+        const u = Math.random();
+        const mag = u > 0.92
+            ? 0.86 + Math.random() * 0.42
+            : 0.16 + Math.pow(u / 0.92, 2.2) * 0.60;
+        this.starBright[i] = mag * (layer === 0 ? 0.62 : layer === 1 ? 0.92 : 1.08);
+        this.starSize[i] = u > 0.92
+            ? 4.8 + Math.random() * 2.6
+            : 1.5 + mag * 2.1 + layer * 0.45;
+        this.starPhase[i] = Math.random() * 6.283185;
+    }
+
+    _initStars() {
+        for (let i = 0; i < config.STAR_COUNT; i++) {
+            this._placeStar(i, 0.12 + 0.88 * Math.random());
+        }
+    }
+
     seed(turingWarmup = config.GS_WARMUP_INIT) {
         this.igniteT = 0;
         this.coreAngle = 0;
@@ -168,16 +219,17 @@ export class CoupledSimulation {
         for (let k = 0; k < 7; k++) {
             const su = (k / 7 + 0.07) % 1.0;
             const sv = 0.5 + 0.16 * Math.sin(k * 2.1);
-            this.disturbTuring(su, sv, 0.9, 0.52, 4.0);
+            this.disturbTuring(su, sv, 0.45, 0.52, 4.0);
         }
-        this.disturbTuring(0.25, 0.28, 0.55, 0.45, 3.5);
-        this.disturbTuring(0.75, 0.72, 0.55, 0.45, 3.5);
+        this.disturbTuring(0.25, 0.28, 0.30, 0.45, 3.5);
+        this.disturbTuring(0.75, 0.72, 0.30, 0.45, 3.5);
         this.stepTuring(0.016, turingWarmup, true);
 
         this._emitCoreRimJets(4, 1.0, 0);
         for (let i = 0; i < 10; i++) {
             this.stepFluid(0.016, config.FLUID_PRESSURE_ITERS, config.TRACER_COUNT, false);
         }
+        this.stepStars(0.016, 0, 0);
     }
 
     ignite() {
@@ -196,7 +248,7 @@ export class CoupledSimulation {
             const fx = Math.cos(a + 0.55) * config.FLUID_BURST_FORCE * strength;
             const fy = Math.sin(a + 0.55) * config.FLUID_BURST_FORCE * strength;
             const col = this._moodColor(moodOverride, k * 2);
-            this.splatFluid(gx, gy, 4.4, fx, fy, col[0] * 0.95, col[1] * 0.95, col[2] * 0.95);
+            this.splatFluid(gx, gy, 4.4, fx, fy, col[0] * 0.85, col[1] * 0.85, col[2] * 0.85);
         }
     }
 
@@ -292,14 +344,14 @@ export class CoupledSimulation {
         this.pointer.strength = 1;
 
         const uv = this.screenToCoreUv(nx, ny);
-        if (uv) this.disturbTuring(uv.u, uv.v, 0.14, 0.03, 2.2);
+        if (uv) this.disturbTuring(uv.u, uv.v, 0.12, 0.025, 2.2);
     }
 
     interactAt(nx, ny, moodOverride = 0) {
         const coreUv = this.screenToCoreUv(nx, ny);
         if (coreUv) {
-            this.disturbTuring(coreUv.u, coreUv.v, 1.15, 0.55, 4.2);
-            this._emitCoreRimJets(4, 0.9, moodOverride);
+            this.disturbTuring(coreUv.u, coreUv.v, 1.1, 0.52, 4.0);
+            this._emitCoreRimJets(4, 0.88, moodOverride);
             return 'core';
         }
 
@@ -307,8 +359,8 @@ export class CoupledSimulation {
         const gy = clamp(1 - ny, 0.03, 0.97) * (this.gh - 2) + 1;
         const col = this._moodColor(moodOverride, 1);
         const f = config.FLUID_BURST_FORCE;
-        this.splatFluid(gx - 1.5, gy, 4.4, 0, f, col[0] * 0.95, col[1] * 0.95, col[2] * 0.95);
-        this.splatFluid(gx + 1.5, gy, 4.4, 0, -f, col[0] * 0.75, col[1] * 0.85, col[2] * 1.1);
+        this.splatFluid(gx - 1.5, gy, 4.4, 0, f, col[0] * 0.85, col[1] * 0.85, col[2] * 0.85);
+        this.splatFluid(gx + 1.5, gy, 4.4, 0, -f, col[0] * 0.70, col[1] * 0.82, col[2] * 1.0);
         return 'fluid';
     }
 
@@ -318,9 +370,9 @@ export class CoupledSimulation {
         const gx = clamp(nx, 0.05, 0.95) * (this.gw - 2) + 1;
         const gy = clamp(1 - ny, 0.05, 0.95) * (this.gh - 2) + 1;
         const col = this._moodColor(mood, 0);
-        this.splatFluid(gx, gy, 4.5, 0, 18, col[0] * 0.45, col[1] * 0.45, col[2] * 0.45);
+        this.splatFluid(gx, gy, 4.5, 0, 16, col[0] * 0.42, col[1] * 0.42, col[2] * 0.42);
         const frontUv = this.screenToCoreUv(nx, ny) || this.screenToCoreUv(0.5, 0.58);
-        if (frontUv) this.disturbTuring(frontUv.u, frontUv.v, 0.45, 0.25, 3.0);
+        if (frontUv) this.disturbTuring(frontUv.u, frontUv.v, 0.4, 0.22, 3.0);
     }
 
     _setBnd(b, x) {
@@ -357,7 +409,6 @@ export class CoupledSimulation {
         x[gh * gw - 1] = 0.5 * (x[gh * gw - 2] + x[topRow - 1]);
     }
 
-    // Fused velocity advection: computes backtrace & bilinear weights once for (u, v)
     _advectVel2(dt, damp) {
         const gw = this.gw, gh = this.gh;
         const u = this.u, v = this.v, u0 = this.u0, v0 = this.v0;
@@ -371,11 +422,11 @@ export class CoupledSimulation {
                 let y = j - dt * v0[idx];
                 if (x < 0.5) x = 0.5; else if (x > maxX) x = maxX;
                 if (y < 0.5) y = 0.5; else if (y > maxY) y = maxY;
-                const i0 = x | 0, i1 = i0 + 1;
-                const j0 = y | 0, j1 = j0 + 1;
+                const i0 = x | 0;
+                const j0 = y | 0;
                 const s1 = x - i0, s0 = 1 - s1;
                 const t1 = y - j0, t0 = 1 - t1;
-                const r0 = j0 * gw + i0, r1 = j1 * gw + i0;
+                const r0 = j0 * gw + i0, r1 = r0 + gw;
                 const w00 = s0 * t0, w10 = s0 * t1, w01 = s1 * t0, w11 = s1 * t1;
                 u[idx] = damp * (w00 * u0[r0] + w10 * u0[r1] + w01 * u0[r0 + 1] + w11 * u0[r1 + 1]);
                 v[idx] = damp * (w00 * v0[r0] + w10 * v0[r1] + w01 * v0[r0 + 1] + w11 * v0[r1 + 1]);
@@ -385,7 +436,6 @@ export class CoupledSimulation {
         this._setBnd(2, v);
     }
 
-    // Fused 3-channel dye advection + RGBA8 texture byte packing in one pass
     _advectDyeAndPack(dt, damp) {
         const gw = this.gw, gh = this.gh;
         const u = this.u, v = this.v, curl = this.curl;
@@ -520,7 +570,6 @@ export class CoupledSimulation {
                             const wh = this.waveH[wIdx] + ripple;
                             this.waveH[wIdx] = wh > config.WAVE_CLAMP ? config.WAVE_CLAMP : wh;
 
-                            // Rim fluid shear feeds morphogen nutrient into Turing pattern
                             const nutrient = config.CORE_RIM_NUTRIENT * Math.min(1, excess * 0.08) * dt * 60;
                             const nv = this.gsV[wIdx] + nutrient;
                             const nu = this.gsU[wIdx] - nutrient * 0.5;
@@ -563,7 +612,6 @@ export class CoupledSimulation {
         const wQuarter = omega * 0.25;
         const gwM1 = gw - 1, ghM1 = gh - 1;
         for (let k = 0; k < iters; k++) {
-            // Red pass: (i + j) even — zero loop-carried neighbor dependency
             for (let j = 1; j < ghM1; j++) {
                 const row = j * gw;
                 for (let i = 2 - (j & 1); i < gwM1; i += 2) {
@@ -572,7 +620,6 @@ export class CoupledSimulation {
                         + wQuarter * (div[idx] + p[idx - 1] + p[idx + 1] + p[idx - gw] + p[idx + gw]);
                 }
             }
-            // Black pass: (i + j) odd
             for (let j = 1; j < ghM1; j++) {
                 const row = j * gw;
                 for (let i = 1 + (j & 1); i < gwM1; i += 2) {
@@ -661,26 +708,27 @@ export class CoupledSimulation {
             const gy = clamp(1 - ny, 0.04, 0.96) * (gh - 2) + 1;
 
             const fMag = config.CORE_EMIT_FORCE * str;
-            const fx = (cosK * 0.85 - sinK * 0.35 * swirlDir) * fMag;
-            const fy = (sinK * 0.85 + cosK * 0.35 * swirlDir) * fMag;
+            const fx = (cosK * 0.85 - sinK * 0.16 * swirlDir) * fMag;
+            const fy = (sinK * 0.85 + cosK * 0.16 * swirlDir) * fMag;
 
-            const phase = ang + morph * 2.4 + this.time * 0.12;
-            let cr = 0.54 + 0.44 * Math.cos(phase + 0.2);
-            let cg = 0.54 + 0.44 * Math.cos(phase + 2.3);
-            let cb = 0.58 + 0.42 * Math.cos(phase + 4.3);
+            // Curated celestial palette: sapphire -> ice-cyan -> amethyst -> rose-champagne (zero green)
+            const phase = ang + morph * 2.2 + this.time * 0.12;
+            const c1 = 0.5 + 0.5 * Math.cos(phase);
+            const c2 = 0.5 + 0.5 * Math.sin(phase);
+            let cr = 0.26 + c1 * 0.28 + (1 - c1) * c2 * 0.42;
+            let cg = 0.46 + c1 * 0.36 + c2 * 0.14;
+            let cb = 0.88 + c1 * 0.12 - c2 * 0.12;
             if (this.wLinkedIn > 0.01) {
                 const w = this.wLinkedIn * 0.72;
-                const s = 0.5 + 0.5 * Math.sin(phase);
-                cr += ((0.24 + s * 0.30) - cr) * w;
-                cg += ((0.74 - s * 0.16) - cg) * w;
+                cr += ((0.36 + c2 * 0.30) - cr) * w;
+                cg += ((0.72 + c1 * 0.16) - cg) * w;
                 cb += (1.0 - cb) * w;
             }
             if (this.wSpotify > 0.01) {
                 const w = this.wSpotify * 0.72;
-                const s = 0.5 + 0.5 * Math.cos(phase);
-                cr += ((0.18 + s * 0.58) - cr) * w;
-                cg += ((0.94 - s * 0.52) - cg) * w;
-                cb += ((0.68 + s * 0.32) - cb) * w;
+                cr += ((0.30 + c1 * 0.44) - cr) * w;
+                cg += ((0.88 - c1 * 0.40) - cg) * w;
+                cb += ((0.80 + c1 * 0.20) - cb) * w;
             }
             const dScale = config.CORE_EMIT_DYE * str * 0.42;
             this.splatFluid(gx, gy, 3.0, fx, fy, cr * dScale, cg * dScale, cb * dScale);
@@ -692,7 +740,6 @@ export class CoupledSimulation {
         const t = this.time;
         const gw = this.gw, gh = this.gh;
 
-        // Morphogenetic fluid emission directly from Turing ridges & waves on the sphere limb
         this._emitFromTuringLimb(sdt);
 
         if (this.pointer.strength > 0.05 && (Math.abs(this.pointer.vx) > 0.002 || Math.abs(this.pointer.vy) > 0.002)) {
@@ -701,7 +748,7 @@ export class CoupledSimulation {
             const col = this._moodColor(this.targetMood, 0);
             const fx = clamp(this.pointer.vx * config.FLUID_POINTER_FORCE, -36, 36);
             const fy = clamp(-this.pointer.vy * config.FLUID_POINTER_FORCE, -36, 36);
-            this.splatFluid(gx, gy, 3.5, fx, fy, col[0] * 0.45, col[1] * 0.45, col[2] * 0.45);
+            this.splatFluid(gx, gy, 3.5, fx, fy, col[0] * 0.42, col[1] * 0.42, col[2] * 0.42);
         }
 
         if (this.targetMood > 0) {
@@ -709,7 +756,7 @@ export class CoupledSimulation {
             const gy = (1 - this.buttonSpot.y) * (gh - 2) + 1;
             const col = this._moodColor(this.targetMood, 0);
             this.splatFluid(gx, gy, 4.0, Math.cos(t * 3) * 8 * sdt * 8, 12 * sdt * 8,
-                col[0] * 0.055, col[1] * 0.055, col[2] * 0.055);
+                col[0] * 0.05, col[1] * 0.05, col[2] * 0.05);
         }
 
         this._vorticityConfinement(sdt);
@@ -725,9 +772,9 @@ export class CoupledSimulation {
         tmp = this.db; this.db = this.db0; this.db0 = tmp;
         this._advectDyeAndPack(sdt, config.FLUID_DYE_DAMP);
 
-        // Trig-free & sqrt-free Lagrangian tracer advection
+        // Velocity-aligned tapered fluid streamlines (2 vertices x 5 floats per tracer)
         const tx = this.tx, ty = this.ty, tAge = this.tAge, tLife = this.tLife, tHue = this.tHue;
-        const u = this.u, v = this.v, tracerBuf = this.tracerBuf;
+        const u = this.u, v = this.v, lineBuf = this.tracerLineBuf;
         const minDim = Math.min(this.width, this.height);
         const aspect = this.width / minDim;
         const aspectY = this.height / minDim;
@@ -740,6 +787,7 @@ export class CoupledSimulation {
         const invFadeSpan2 = 1 / Math.max(1e-6, fadeOut2 - fadeIn2);
         const gwM2 = gw - 2, ghM2 = gh - 2;
         const invGwDt = sdt / gw, invGhDt = sdt / gh;
+        const streakScale = config.TRACER_STREAK_SCALE;
         const count = Math.min(config.TRACER_COUNT, tracerCount);
 
         for (let i = 0; i < count; i++) {
@@ -750,6 +798,7 @@ export class CoupledSimulation {
             const sx = (nx - 0.5) * aspect;
             const sy = (ny - 0.5) * aspectY;
             let dist2 = sx * sx + sy * sy;
+            let respawned = false;
             if (age > tLife[i] || nx <= 0.01 || nx >= 0.99 || ny <= 0.01 || ny >= 0.99 || dist2 < resetR2) {
                 this._resetTracer(i);
                 nx = tx[i];
@@ -757,7 +806,9 @@ export class CoupledSimulation {
                 const nsx = (nx - 0.5) * aspect;
                 const nsy = (ny - 0.5) * aspectY;
                 dist2 = nsx * nsx + nsy * nsy;
+                respawned = true;
             }
+            const prevNx = nx, prevNy = ny;
             const gx = nx * gwM2 + 1;
             const gy = ny * ghM2 + 1;
             let i0 = gx | 0; if (i0 < 0) i0 = 0; else if (i0 > gwM2) i0 = gwM2;
@@ -791,15 +842,132 @@ export class CoupledSimulation {
             const diff = (dist2 - midR2) * invCoreR2;
             const sheathBoost = 1 + 0.65 * Math.max(0, 1 - diff * diff * 6.0);
             const spClamp = speed > 1 ? 1 : speed;
-            const alpha = bell * (0.28 + 0.52 * spClamp) * coreFade * sheathBoost;
-
-            const vo = i * 5;
-            tracerBuf[vo] = nx;
-            tracerBuf[vo + 1] = ny;
-            tracerBuf[vo + 2] = speed;
+            let alpha = respawned ? 0 : bell * (0.28 + 0.52 * spClamp) * coreFade * sheathBoost * 1.35;
+            if (alpha > 1) alpha = 1;
             const rawHue = angleHue * 0.65 + tHue[i] * 0.35;
-            tracerBuf[vo + 3] = rawHue >= 1 ? rawHue - 1 : rawHue;
-            tracerBuf[vo + 4] = alpha;
+            const hue = rawHue >= 1 ? rawHue - 1 : rawHue;
+
+            let dx = respawned ? 0 : (nx - prevNx) * streakScale;
+            let dy = respawned ? 0 : (ny - prevNy) * streakScale;
+            const seg2 = dx * dx + dy * dy;
+            if (seg2 > 0.004624) {
+                const sc = 0.068 / Math.sqrt(seg2);
+                dx *= sc; dy *= sc;
+            }
+
+            const vo = i * 10;
+            lineBuf[vo] = nx - dx;
+            lineBuf[vo + 1] = ny - dy;
+            lineBuf[vo + 2] = speed;
+            lineBuf[vo + 3] = hue;
+            lineBuf[vo + 4] = 0;
+            lineBuf[vo + 5] = nx;
+            lineBuf[vo + 6] = ny;
+            lineBuf[vo + 7] = speed;
+            lineBuf[vo + 8] = hue;
+            lineBuf[vo + 9] = alpha;
+        }
+    }
+
+    stepStars(dt, parallaxX = 0, parallaxY = 0) {
+        const N = config.STAR_COUNT;
+        const starX = this.starX, starY = this.starY, starZ = this.starZ;
+        const starTemp = this.starTemp, starBright = this.starBright;
+        const starLayer = this.starLayer, starSize = this.starSize, starPhase = this.starPhase;
+        const buf = this.starLineBuf;
+        const pBuf = this.starPointBuf;
+
+        const warp = config.STAR_WARP_BOOST * Math.exp(-this.igniteT * config.STAR_WARP_DECAY);
+        const speed = config.STAR_CRUISE_SPEED * (1 + warp);
+        this.starSpeed = speed;
+        const tNow = this.time;
+
+        const minDim = Math.min(this.width, this.height);
+        const ndcScaleX = (2 * minDim) / this.width;
+        const ndcScaleY = (2 * minDim) / this.height;
+        const coreR = this.coreScreenRadiusFrac;
+        const invCoreR = 1 / coreR;
+        const vpX = parallaxX * 0.075;
+        const vpY = -parallaxY * 0.075;
+
+        for (let i = 0; i < N; i++) {
+            const layer = starLayer[i];
+            const lSpeed = layer === 0 ? 0.38 : layer === 1 ? 1.0 : 1.95;
+            const tailLag = Math.min(0.15, speed * lSpeed * 0.26 + (layer === 0 ? 0.0012 : 0.0028));
+
+            let z = starZ[i] - speed * lSpeed * dt;
+            let wrapped = false;
+            if (z < 0.09) {
+                this._placeStar(i, 0.92 + Math.random() * 0.08);
+                z = starZ[i];
+                wrapped = true;
+            } else {
+                starZ[i] = z;
+            }
+
+            const sx = starX[i], sy = starY[i];
+            const invZ = 1 / z;
+            const zTail = z + tailLag;
+            const invZT = 1 / zTail;
+            const pMult = 0.55 + layer * 0.35;
+
+            let hx = sx * invZ * 0.28 + vpX * (1 - z) * pMult;
+            let hy = sy * invZ * 0.28 + vpY * (1 - z) * pMult;
+            let tx = sx * invZT * 0.28 + vpX * (1 - zTail) * pMult;
+            let ty = sy * invZT * 0.28 + vpY * (1 - zTail) * pMult;
+
+            const rDist = Math.sqrt(hx * hx + hy * hy);
+            const rCore = rDist * invCoreR;
+            let occ = 1;
+            if (rCore < 1.85) {
+                const lens = config.STAR_LENS_STRENGTH / (rCore * rCore + 0.22);
+                hx *= 1 + lens;
+                hy *= 1 + lens;
+                tx *= 1 + lens * 0.85;
+                ty *= 1 + lens * 0.85;
+                occ = (rCore - 0.95) / 0.14;
+                if (occ < 0) occ = 0; else if (occ > 1) occ = 1;
+            }
+
+            const fadeIn = clamp((1.0 - z) * 4.5, 0, 1);
+            const fadeOut = clamp((z - 0.09) * 8.0, 0, 1);
+            const twinkle = 0.87 + 0.13 * Math.sin(tNow * (1.05 + layer * 0.65) + starPhase[i]);
+            const alpha = wrapped ? 0 : starBright[i] * fadeIn * fadeOut * occ * twinkle * 0.92;
+
+            const temp = starTemp[i];
+            let r, g, b;
+            if (temp < 0.24) { r = 0.60; g = 0.82; b = 1.00; }
+            else if (temp < 0.56) { r = 0.90; g = 0.96; b = 1.00; }
+            else if (temp < 0.80) { r = 1.00; g = 0.96; b = 0.88; }
+            else if (temp < 0.93) { r = 1.00; g = 0.88; b = 0.72; }
+            else { r = 1.00; g = 0.78; b = 0.66; }
+
+            const ndcHx = hx * ndcScaleX;
+            const ndcHy = hy * ndcScaleY;
+
+            const o = i * 12;
+            buf[o] = tx * ndcScaleX;
+            buf[o + 1] = ty * ndcScaleY;
+            buf[o + 2] = r;
+            buf[o + 3] = g;
+            buf[o + 4] = b;
+            buf[o + 5] = alpha * (layer === 0 ? 0.05 : 0.13);
+
+            buf[o + 6] = ndcHx;
+            buf[o + 7] = ndcHy;
+            buf[o + 8] = r;
+            buf[o + 9] = g;
+            buf[o + 10] = b;
+            buf[o + 11] = alpha * 0.68;
+
+            const p = i * 7;
+            pBuf[p] = ndcHx;
+            pBuf[p + 1] = ndcHy;
+            pBuf[p + 2] = r;
+            pBuf[p + 3] = g;
+            pBuf[p + 4] = b;
+            pBuf[p + 5] = alpha;
+            pBuf[p + 6] = starSize[i] * (0.88 + 0.24 * (1 - z));
         }
     }
 
@@ -828,7 +996,6 @@ export class CoupledSimulation {
                 const rU = (y > 0 ? y - 1 : 0) * tw;
                 const rD = (y < thM1 ? y + 1 : thM1) * tw;
 
-                // x = 0 (wrapped left neighbor = twM1)
                 {
                     const u = gsU[rC], v = gsV[rC];
                     const lapU = 0.2 * (gsU[rC + twM1] + gsU[rC + 1] + gsU[rU] + gsU[rD])
@@ -842,7 +1009,6 @@ export class CoupledSimulation {
                     gsV2[rC] = nv < 0 ? 0 : nv > 1 ? 1 : nv;
                 }
 
-                // Interior 1 <= x < twM1 (zero branch wrapping)
                 for (let x = 1; x < twM1; x++) {
                     const idx = rC + x;
                     const u = gsU[idx], v = gsV[idx];
@@ -858,7 +1024,6 @@ export class CoupledSimulation {
                     gsV2[idx] = nv < 0 ? 0 : nv > 1 ? 1 : nv;
                 }
 
-                // x = twM1 (wrapped right neighbor = 0)
                 {
                     const idx = rC + twM1;
                     const xm = twM1 - 1;
@@ -884,7 +1049,6 @@ export class CoupledSimulation {
         if (stepWave) {
             const waveH = this.waveH, wavePrev = this.wavePrev, waveNext = this.waveNext;
             const c2 = config.WAVE_C2, damp = config.WAVE_DAMP, wClamp = config.WAVE_CLAMP, negClamp = -wClamp;
-            // Fused wave PDE update + RGBA8 texture packing for interior rows 1..th-2
             for (let y = 1; y < thM1; y++) {
                 const rC = y * tw, rU = (y - 1) * tw, rD = (y + 1) * tw;
                 {
@@ -964,7 +1128,7 @@ export class CoupledSimulation {
         }
     }
 
-    update(dt, opts = {}) {
+    update(dt, opts = {}, parallax = null) {
         const sdt = Math.min(dt, 0.05);
         this.time += sdt;
         this.igniteT += sdt;
@@ -979,5 +1143,6 @@ export class CoupledSimulation {
         this.stepFluid(sdt, opts.pressureIters ?? config.FLUID_PRESSURE_ITERS,
             opts.tracers ?? config.TRACER_COUNT, true);
         this.stepTuring(sdt, opts.gsSubsteps ?? config.GS_SUBSTEPS, true);
+        this.stepStars(sdt, parallax ? parallax.x : 0, parallax ? parallax.y : 0);
     }
 }

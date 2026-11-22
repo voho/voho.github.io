@@ -29,6 +29,7 @@ const quality = {
     tracers: config.TRACER_COUNT,
     gsSubsteps: config.GS_SUBSTEPS,
     pressureIters: config.FLUID_PRESSURE_ITERS,
+    bloom: true,
 };
 
 let sim = null;
@@ -106,6 +107,7 @@ function degrade() {
     if (step.tracers) quality.tracers = step.tracers;
     if (step.gsSubsteps) quality.gsSubsteps = step.gsSubsteps;
     if (step.pressureIters) quality.pressureIters = step.pressureIters;
+    if (typeof step.bloom === 'boolean') quality.bloom = step.bloom;
     if (step.maxDpr) {
         quality.maxDpr = step.maxDpr;
         fitCanvases();
@@ -142,7 +144,7 @@ function frame(now) {
     view.parallax.x += (view.parallax.tx - view.parallax.x) * parEase;
     view.parallax.y += (view.parallax.ty - view.parallax.y) * parEase;
 
-    sim.update(dt, quality);
+    sim.update(dt, quality, view.parallax);
     renderOnce();
     governQuality(dt);
 }

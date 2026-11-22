@@ -1,6 +1,7 @@
 // config.js
 // Central tuning knobs for the coupled Navier-Stokes fluid solver, Gray-Scott
-// Turing morphogenesis core, wave PDE, interactions, and quality governor.
+// Turing morphogenesis core, wave PDE, 3D hyperspace starfield, interactions,
+// and quality governor.
 
 export const config = {
     // --- Navier-Stokes Fluid Grid --------------------------------------------
@@ -14,12 +15,20 @@ export const config = {
     FLUID_DYE_DAMP: 0.986,
     FLUID_MAX_VEL: 48,
     FLUID_POINTER_FORCE: 460,
-    FLUID_BURST_FORCE: 28,
+    FLUID_BURST_FORCE: 26,
 
-    // --- Lagrangian Fluid Tracers --------------------------------------------
-    TRACER_COUNT: 3200,
+    // --- Tapered Fluid Streamlines -------------------------------------------
+    TRACER_COUNT: 2400,
+    TRACER_STREAK_SCALE: 7.5,
     TRACER_LIFE_MIN: 1.8,
     TRACER_LIFE_MAX: 4.2,
+
+    // --- 3D Hyperspace Starfield ---------------------------------------------
+    STAR_COUNT: 640,
+    STAR_CRUISE_SPEED: 0.028,   // calm layered drift per second
+    STAR_WARP_BOOST: 8.0,       // load deceleration multiplier
+    STAR_WARP_DECAY: 2.0,
+    STAR_LENS_STRENGTH: 0.05,   // subtle optical bending around core rim
 
     // --- Turing Morphogenesis + Wave PDE Core --------------------------------
     TURING_W: 96,
@@ -41,7 +50,7 @@ export const config = {
     WAVE_CLAMP: 1.5,
 
     // --- 3D Core Projection & Bidirectional Physical Coupling ----------------
-    CORE_SPIN_RAD_S: 0.15,
+    CORE_SPIN_RAD_S: 0.042,
     CORE_CAM_Z: 4.35,
     CORE_CAM_FOV: 1.35,
     CORE_WORLD_RADIUS: 0.88,
@@ -49,17 +58,17 @@ export const config = {
     CORE_NARROW_ASPECT: 0.8,
     CORE_NARROW_SCALE: 1.18,
     CORE_RIM_EMITTERS: 20,      // Turing limb sampling sites exhaling into fluid
-    CORE_EMIT_FORCE: 24,
-    CORE_EMIT_DYE: 0.72,
-    CORE_TORQUE_GAIN: 0.0028,   // viscous tangential fluid torque -> core spin
-    CORE_SPIN_RESTORE: 0.85,
-    CORE_SPIN_MAX: 1.85,
+    CORE_EMIT_FORCE: 20,
+    CORE_EMIT_DYE: 0.56,
+    CORE_TORQUE_GAIN: 0.0014,   // viscous tangential fluid torque -> core spin
+    CORE_SPIN_RESTORE: 1.15,
+    CORE_SPIN_MAX: 0.72,
     CORE_RIM_NUTRIENT: 0.016,   // rim shear feeds Turing morphogenesis & waves
 
-    // --- Palette (shared by fluid plumes, tracers and bursts) ----------------
+    // --- Curated Celestial Luxury Palette ------------------------------------
     PALETTE: [
-        '#ff5d6c', '#ff9f43', '#ffd93d', '#6dd95f', '#34e5c2',
-        '#59d7ff', '#6fa8ff', '#a78bff', '#ff7ad9',
+        '#4a7dff', '#72d8ff', '#b8e8ff', '#8d6bff',
+        '#c4a6ff', '#5be0d6', '#e8c7a8', '#6898ff',
     ],
 
     // --- Camera / Input / Page Choreography ----------------------------------
@@ -74,13 +83,13 @@ export const config = {
 
     // --- Quality Governor (steps down once if FPS drops below target) --------
     MAX_DPR: 1.5,
-    CORE_MARCH_STEPS: 32,
+    CORE_MARCH_STEPS: 28,
     QUALITY_SAMPLE_S: 1.5,
     QUALITY_GRACE_S: 1.8,
     QUALITY_MIN_FPS: 46,
     QUALITY_STEPS: [
-        { maxDpr: 1.15, marchSteps: 26, tracers: 1800, gsSubsteps: 2, pressureIters: 4 },
-        { maxDpr: 0.88, marchSteps: 22, tracers: 900, gsSubsteps: 1, pressureIters: 3 },
-        { maxDpr: 0.72, marchSteps: 18, tracers: 400, gsSubsteps: 1, pressureIters: 3 },
+        { maxDpr: 1.15, marchSteps: 24, tracers: 1500, gsSubsteps: 2, pressureIters: 4, bloom: true },
+        { maxDpr: 0.88, marchSteps: 20, tracers: 800, gsSubsteps: 1, pressureIters: 3, bloom: false },
+        { maxDpr: 0.72, marchSteps: 18, tracers: 400, gsSubsteps: 1, pressureIters: 3, bloom: false },
     ],
 };

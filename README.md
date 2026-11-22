@@ -10,10 +10,11 @@ A coupled real-time physics and morphogenesis simulation renders behind a fixed,
 
 - `config.js` — central tuning knobs (Navier-Stokes solver, Gray-Scott & wave PDEs, core coupling, tracers, camera, choreography, quality tiers).
 - `simulation.js` — pure DOM-free `CoupledSimulation` engine combining:
-  - an adaptive isotropic **Navier-Stokes (Stable Fluids)** grid (`∇·u = 0` via Red-Black SOR, vorticity confinement, fused semi-Lagrangian advection) with solid-body deflection around the central core and **3,200** advected **Lagrangian tracers**;
-  - a **96×64 Gray-Scott reaction-diffusion PDE** coupled to a **2D damped wave equation** whose morphogen concentrations and waves physically displace the 3D core surface;
-  - **bidirectional physical coupling**: active Turing ridges & waves on the sphere's limb exhale iridescent filaments directly into the surrounding fluid, while viscous tangential fluid torque spins/tilts the 3D sphere and boundary shear feeds surface waves & morphogen nutrients.
-- `renderer.js` — `WebGL2Renderer` (single-pass 3D SDF raymarched obsidian core with chromatic glass refraction, live Navier-Stokes surface reflections, translucent limb mist veil, thin-film optical iridescence, and additive tracers) plus a `Canvas2DRenderer` graceful fallback driven by the same simulation state.
+  - an adaptive isotropic **Navier-Stokes (Stable Fluids)** grid (`∇·u = 0` via Red-Black SOR, vorticity confinement, fused semi-Lagrangian advection) with solid-body deflection around the central core and **2,400** tapered **velocity streamlines**;
+  - a **96×64 Gray-Scott reaction-diffusion PDE** coupled to a **2D damped wave equation** shaping a slowly morphing, breathing liquid-obsidian core;
+  - a **3-layer 3D hyperspace starfield** (`640` blackbody-tinted stars across 3 parallax depth/speed layers with Airy disc cores, optical diffraction glints, load warp deceleration, and core rim gravitational lensing);
+  - **bidirectional physical coupling**: active Turing ridges & waves on the sphere's limb exhale iridescent filaments directly into the surrounding fluid, while viscous tangential fluid torque gently spins/tilts the 3D sphere and boundary shear feeds surface waves & morphogen nutrients.
+- `renderer.js` — `WebGL2Renderer` (single-pass 3D SDF raymarched morphing obsidian core with subsurface bioluminescent Turing veins, chromatic glass refraction, 4-tap bicubic fluid silk, continuous silhouette corona, volumetric domain-warped pulsating deep-space nebulae + distant micro-star dust layers, tapered streamlines, layered 3D stars + Airy heads, and half-res separable HDR bloom with ACES + IGN dithering) plus a `Canvas2DRenderer` graceful fallback driven by the same simulation state.
 - `script.js` — WebGL2 initialization, `webglcontextlost` fallback and recovery, `100lvh`-safe responsive sizing, pointer/touch/tilt parallax, button mood hooks, load ignition choreography, FPS quality governor, and `prefers-reduced-motion` handling.
 
 ## Interaction
@@ -26,8 +27,8 @@ A coupled real-time physics and morphogenesis simulation renders behind a fixed,
 
 ## Graceful degradation & accessibility
 
-1. **WebGL2 (Full)** — 32-step 3D SDF raymarch + 3,200 tracers + `1.5` max DPR.
-2. **Quality Governor** — steps down `maxDpr`, raymarch steps, tracer count, and PDE substeps if FPS drops below threshold.
+1. **WebGL2 (Full)** — 28-step morphing liquid-obsidian raymarch + half-res HDR bloom + 2,400 tapered streamlines + 640 layered 3D stars + pulsating nebulae + `1.5` max DPR.
+2. **Quality Governor** — steps down `maxDpr`, raymarch steps, tracer count, PDE substeps, and bloom if FPS drops below threshold.
 3. **Canvas 2D Fallback** — automatically activates when WebGL2 is unavailable or context is lost.
 4. **`prefers-reduced-motion`** — renders a single settled static frame with no animation loop.
 

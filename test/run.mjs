@@ -132,7 +132,7 @@ for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
     const arraysOk = allFinite(sim.u) && allFinite(sim.v) && allFinite(sim.div) && allFinite(sim.p)
         && allFinite(sim.dr) && allFinite(sim.dg) && allFinite(sim.db)
         && allFinite(sim.gsU) && allFinite(sim.gsV) && allFinite(sim.waveH)
-        && allFinite(sim.tracerBuf);
+        && allFinite(sim.tracerLineBuf) && allFinite(sim.starLineBuf) && allFinite(sim.starPointBuf);
     check('120-step soak leaves all simulation fields finite (0 NaNs)', arraysOk);
 
     const meanDiv = sim.computeMeanDivergence();
@@ -143,6 +143,22 @@ for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
     const minV = Math.min(...sim.gsV);
     check(`Turing morphogenesis structure preserved (gsV in [${minV.toFixed(3)}, ${maxV.toFixed(3)}])`,
         maxV > 0.2 && minV < 0.05);
+}
+
+// --- 4b. 3D hyperspace starfield warp deceleration & activity ---------------
+{
+    const sim = new CoupledSimulation(1440, 900);
+    sim.ignite();
+    sim.update(0.016);
+    const warpSpeed = sim.starSpeed;
+    for (let i = 0; i < 150; i++) sim.update(0.016);
+    const cruiseSpeed = sim.starSpeed;
+    let visibleStars = 0;
+    for (let i = 0; i < config.STAR_COUNT; i++) {
+        if (sim.starLineBuf[i * 12 + 11] > 0.04 && sim.starPointBuf[i * 7 + 5] > 0.04) visibleStars++;
+    }
+    check(`hyperspace starfield decelerates to cruise & stays active (warp=${warpSpeed.toFixed(3)} -> cruise=${cruiseSpeed.toFixed(3)}, visible=${visibleStars})`,
+        warpSpeed > cruiseSpeed * 3 && visibleStars > 150);
 }
 
 // --- 5. Per-frame CPU update cost -------------------------------------------
