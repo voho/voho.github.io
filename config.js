@@ -57,15 +57,15 @@ export const config = {
     BUTTON_PULSE_COOLDOWN_MS: 320,
 
     // --- WebGL2 Geodesic Raymarch & HDR Quality Governor ---------------------
-    BH_MARCH_STEPS: 96,
+    BH_MARCH_STEPS: 72,
     MAX_DPR: 1.5,
     QUALITY_GRACE_S: 2.2,
     QUALITY_SAMPLE_S: 1.0,
     QUALITY_MIN_FPS: 44,
     QUALITY_STEPS: [
         { bloom: false },
-        { marchSteps: 76, maxDpr: 1.25 },
-        { marchSteps: 60, maxDpr: 1.0, maxParticles: 500 },
+        { marchSteps: 56, maxDpr: 1.2 },
+        { marchSteps: 44, maxDpr: 1.0, maxParticles: 500 },
     ],
 
     // --- UI Timing & Device Tilt ---------------------------------------------

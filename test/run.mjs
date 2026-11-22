@@ -106,11 +106,15 @@ for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
         sim.update(0.016, {}, { x: Math.cos(t) * 0.5, y: Math.sin(t) * 0.3 });
     }
 
-    const arraysOk = allFinite(sim.px) && allFinite(sim.py) && allFinite(sim.pz)
+    const drawCountOk = sim.drawCount > 0 && sim.drawCount <= config.MAX_PARTICLES;
+    const arraysOk = drawCountOk
+        && allFinite(sim.px) && allFinite(sim.py) && allFinite(sim.pz)
         && allFinite(sim.pvx) && allFinite(sim.pvy) && allFinite(sim.pvz)
-        && allFinite(sim.pFade) && allFinite(sim.pLineBuf) && allFinite(sim.pHeadBuf)
+        && allFinite(sim.pFade)
+        && allFinite(sim.pLineBuf.subarray(0, sim.drawCount * 12))
+        && allFinite(sim.pHeadBuf.subarray(0, sim.drawCount * 7))
         && allFinite(sim.bhT1) && allFinite(sim.bhN) && allFinite(sim.bhT2);
-    check('180-step soak leaves all simulation arrays finite (0 NaNs)', arraysOk);
+    check(`180-step soak leaves all simulation arrays finite (0 NaNs, drawCount=${sim.drawCount})`, arraysOk);
 }
 
 // --- 5. Per-frame CPU update cost -------------------------------------------
@@ -122,7 +126,7 @@ for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
     for (let i = 0; i < 180; i++) sim.update(1 / 60);
     const perFrame = Number(process.hrtime.bigint() - t0) / 1e6 / 180;
     console.log(`info black hole CPU update cost: ${perFrame.toFixed(3)} ms/frame`);
-    check('CPU update cost under 1.0 ms/frame', perFrame < 1.0);
+    check('CPU update cost under 0.5 ms/frame', perFrame < 0.5);
 }
 
 // --- 6. GLSL shader syntax & delimiter checks -------------------------------

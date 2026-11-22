@@ -1,6 +1,7 @@
 // renderer.js
-// WebGL2 geodesic ray-tracing Black Hole renderer + half-res separable HDR
-// bloom + Canvas 2D fallback driven cleanly from the same BlackHoleSimulation state.
+// WebGL2 geodesic ray-tracing Black Hole renderer + quarter-res separable HDR
+// bloom + compacted active particle draw + Canvas 2D fallback driven from
+// the same BlackHoleSimulation state.
 
 import { config } from './config.js';
 
@@ -21,7 +22,10 @@ out vec4 fragColor;
 
 uniform vec2 uRes;
 uniform float uTime;
-uniform vec3 uWeights; // x=M87*, y=Gargantua, z=Cygnus X-1
+uniform vec3 uWeights;   // x=M87*, y=Gargantua, z=Cygnus X-1
+uniform vec4 uBhParams;  // x=rIn, y=rOut, z=kerrSpin, w=omegaBase
+uniform vec3 uRingTint;
+uniform vec3 uNebTint;
 uniform float uAbsorb;
 uniform vec3 uCamPos;
 uniform vec3 uCamU;
@@ -57,6 +61,12 @@ float noise2(vec2 p) {
              mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
+float fbm2(vec2 p) {
+  float v = 0.5 * noise2(p);
+  mat2 rot = mat2(0.80, -0.60, 0.60, 0.80);
+  return v + 0.25 * noise2(rot * p * 2.03 + vec2(11.7, 6.3));
+}
+
 float fbm3(vec2 p) {
   float v = 0.0;
   float a = 0.5;
@@ -77,8 +87,7 @@ vec3 blackbodyGargantua(float temp) {
   vec3 hot   = vec3(0.88, 0.94, 1.00);
   vec3 c = mix(ember, gold, smoothstep(0.05, 0.48, x));
   c = mix(c, ivory, smoothstep(0.45, 0.92, x));
-  c = mix(c, hot, smoothstep(0.92, 1.38, x));
-  return c;
+  return mix(c, hot, smoothstep(0.92, 1.38, x));
 }
 
 vec3 plasmaCygnus(float temp) {
@@ -89,8 +98,7 @@ vec3 plasmaCygnus(float temp) {
   vec3 hot    = vec3(0.92, 0.98, 1.00);
   vec3 c = mix(indigo, sapph, smoothstep(0.05, 0.45, x));
   c = mix(c, cyan, smoothstep(0.42, 0.88, x));
-  c = mix(c, hot, smoothstep(0.88, 1.38, x));
-  return c;
+  return mix(c, hot, smoothstep(0.88, 1.38, x));
 }
 
 vec3 plasmaM87(float temp) {
@@ -101,58 +109,49 @@ vec3 plasmaM87(float temp) {
   vec3 pearl = vec3(1.00, 0.95, 0.88);
   vec3 c = mix(crim, amber, smoothstep(0.06, 0.48, x));
   c = mix(c, gold, smoothstep(0.45, 0.92, x));
-  c = mix(c, pearl, smoothstep(0.92, 1.38, x));
-  return c;
+  return mix(c, pearl, smoothstep(0.92, 1.38, x));
 }
 
-float starGrid(vec3 dir, float scale, float thresh) {
+vec2 starGridCol(vec3 dir, float scale, float thresh) {
   vec3 p = dir * scale;
   vec3 id = floor(p);
   vec3 f = fract(p) - 0.5;
   vec3 r = hash33(id);
-  if (r.x <= thresh) return 0.0;
-  vec3 off = (r - 0.5) * 0.44;
-  vec3 d = f - off;
-  float dist2 = dot(d, d);
-  return exp(-dist2 * 52.0) * smoothstep(thresh, 1.0, r.x);
+  if (r.x <= thresh) return vec2(0.0, r.y);
+  vec3 d = f - (r - 0.5) * 0.44;
+  return vec2(exp(-dot(d, d) * 52.0) * smoothstep(thresh, 1.0, r.x), r.y);
 }
 
-vec3 sampleLensedSky(vec3 dir, vec3 w) {
-  // Stars depend strictly on bent sky direction so hovering links keeps stars anchored
-  float s1 = starGrid(dir, 58.0, 0.945);
-  float s2 = starGrid(dir, 118.0, 0.962);
-  vec3 rCol = hash33(floor(dir * 58.0));
-  vec3 tint1 = mix(vec3(0.66, 0.82, 1.0), vec3(1.0, 0.88, 0.72), rCol.y);
+vec3 sampleLensedSky(vec3 dir) {
+  vec2 s1 = starGridCol(dir, 58.0, 0.945);
+  float s2 = starGridCol(dir, 118.0, 0.962).x;
+  vec3 tint1 = mix(vec3(0.66, 0.82, 1.0), vec3(1.0, 0.88, 0.72), s1.y);
 
   vec2 bandCoord = vec2(dir.x + dir.z * 0.7, dir.y * 2.2 - dir.x * 0.35);
-  float neb = fbm3(bandCoord * 2.4 + vec2(3.1, -1.7));
-  float neb2 = fbm3(bandCoord * 4.1 - vec2(1.4, 2.8));
+  float neb = fbm2(bandCoord * 2.4 + vec2(3.1, -1.7));
+  float neb2 = noise2(bandCoord * 4.1 - vec2(1.4, 2.8));
   float band = exp(-pow(dir.y * 1.4 - dir.x * 0.45 + (neb - 0.5) * 0.4, 2.0) * 3.2);
 
-  vec3 nebTint = vec3(0.16, 0.14, 0.30) * w.x
-               + vec3(0.10, 0.16, 0.34) * w.y
-               + vec3(0.11, 0.25, 0.58) * w.z;
-
   vec3 base = vec3(0.009, 0.013, 0.028);
-  base += nebTint * neb * neb2 * band * 0.24;
-  base += tint1 * s1 * 1.15 + vec3(0.82, 0.90, 1.0) * s2 * 0.52;
+  base += uNebTint * (neb * neb2 * band * 0.30);
+  base += tint1 * s1.x * 1.15 + vec3(0.82, 0.90, 1.0) * s2 * 0.52;
   return base;
 }
 
 vec4 evalDisk(vec3 locP, vec3 locRayDir, vec3 w, float absorb) {
   float rad = length(locP.xz);
-  float rIn = w.x * 2.12 + w.y * 2.20 + w.z * 1.82;
-  float rOut = w.x * 8.40 + w.y * 8.20 + w.z * 7.60;
+  float rIn = uBhParams.x;
+  float rOut = uBhParams.y;
   if (rad < rIn || rad > rOut) return vec4(0.0);
 
   // Differential Keplerian shear locked to orbital velocity (-locP.z, 0, locP.x)
-  float omega = (w.z * 2.05 + (1.0 - w.z) * 1.55) / pow(max(1.2, rad), 1.35);
+  float omega = uBhParams.w / (rad * sqrt(rad));
   float rotAng = -uTime * omega * 0.42;
   float ca = cos(rotAng), sa = sin(rotAng);
   vec2 rXZ = vec2(locP.x * ca - locP.z * sa, locP.x * sa + locP.z * ca);
 
   float n1 = fbm3(rXZ * 0.68 + vec2(sin(rad * 1.4), cos(rad * 1.4)) * 0.45);
-  float n2 = fbm3(rXZ * 1.45 - vec2(0.0, uTime * 0.05));
+  float n2 = fbm2(rXZ * 1.45 - vec2(0.0, uTime * 0.05));
   float armAngle = atan(rXZ.y, rXZ.x);
   float rings = 0.55 + 0.45 * sin(rad * 4.8 - n1 * 4.2 + armAngle * (2.0 + w.x));
   float streaks = smoothstep(0.18, 0.85, n1 * 0.72 + n2 * 0.45);
@@ -162,7 +161,6 @@ vec4 evalDisk(vec3 locP, vec3 locRayDir, vec3 w, float absorb) {
   float outerFade = 1.0 - smoothstep(rOut * 0.46, rOut, rad);
   float iscoBoost = exp(-(rad - rIn) * 0.65);
 
-  // Relativistic Doppler beaming & gravitational redshift
   vec3 vOrb = normalize(vec3(-locP.z, 0.0, locP.x));
   float beta = clamp(sqrt((w.z * 0.60 + (1.0 - w.z) * 0.50) / max(1.15, rad)), 0.08, 0.58);
   float mu = dot(vOrb, -normalize(locRayDir));
@@ -192,11 +190,42 @@ void main() {
 
   vec3 pos = uCamPos;
   vec3 vel = normalize(uv.x * uCamU + uv.y * uCamV + uFov * uCamW);
-
   float rs = 1.0;
+
+  // Impact parameter & exact Schwarzschild integral match across bounding sphere
+  float bDot = dot(pos, vel);
+  vec3 closest = pos - bDot * vel;
+  float b2 = dot(closest, closest);
+  float bLen = sqrt(b2);
+  float cosStart = clamp(-bDot * inversesqrt(dot(pos, pos)), 0.0, 1.0);
+
+  // Outer-sky fast path: rays well outside disk/jets skip the raymarch loop
+  if (bLen > 11.5) {
+    float s0 = -cosStart;
+    float f0 = 1.5 * s0 - 0.5 * s0 * s0 * s0;
+    float defl = (rs / bLen) * (1.0 - f0) + (2.945 / b2) * 0.5 * (1.0 + cosStart);
+    vec3 dirOut = normalize(vel - (closest / bLen) * defl);
+    vec3 sky = sampleLensedSky(dirOut);
+    float luma = dot(sky, vec3(0.2126, 0.7152, 0.0722));
+    fragColor = vec4(sky / (1.0 + luma * 0.42), 1.0);
+    return;
+  }
+
+  // Analytic jump to entry shell rJump = 12.2 (rJump^2 = 148.84) with matching bend
+  float zJump = sqrt(max(0.0, 148.84 - b2));
+  float tStart = max(0.0, -bDot - zJump);
+  if (tStart > 0.0) {
+    pos += vel * tStart;
+    float bSafe = max(2.0, bLen);
+    float s0 = -cosStart;
+    float sj = -zJump / 12.2;
+    float dEntry = (rs / bSafe) * ((1.5 * sj - 0.5 * sj * sj * sj) - (1.5 * s0 - 0.5 * s0 * s0 * s0));
+    vel = normalize(vel - (closest / bSafe) * dEntry);
+  }
+
   vec3 hVec = cross(pos, vel);
   float h2 = dot(hVec, hVec);
-  float kerrSpin = uWeights.x * 0.08 + uWeights.y * 0.04 + uWeights.z * 0.22;
+  float kerrSpin = uBhParams.z;
 
   vec3 accum = vec3(0.0);
   float trans = 1.0;
@@ -204,32 +233,42 @@ void main() {
   float minR = 1e4;
   int maxSteps = int(uMarchSteps);
 
-  for (int i = 0; i < 96; i++) {
+  for (int i = 0; i < 72; i++) {
     if (i >= maxSteps) break;
     float r2 = dot(pos, pos);
-    float r = sqrt(r2);
+    float invR = inversesqrt(r2);
+    float r = r2 * invR;
     minR = min(minR, r);
 
     if (r < rs * 1.005) {
       captured = true;
       break;
     }
-    if (r > 22.0 && dot(pos, vel) > 0.0) break;
+    if (r > 13.5 && dot(pos, vel) > 0.0) {
+      float vDot = dot(pos, vel);
+      float cosE = clamp(vDot * invR, 0.0, 1.0);
+      vec3 cE = pos - vDot * vel;
+      float cEL = max(2.0, length(cE));
+      float dExit = (rs / cEL) * (1.0 - (1.5 * cosE - 0.5 * cosE * cosE * cosE));
+      vel = normalize(vel - (cE / cEL) * dExit);
+      break;
+    }
 
     float hPrev = dot(pos, uBhN);
-    float dt = clamp((r - rs * 0.96) * 0.09, 0.026, 0.95);
-    float invR5 = 1.0 / (r2 * r2 * r);
+    float dt = clamp((r - rs * 0.96) * 0.10, 0.026, 0.95);
+    float invR2 = invR * invR;
+    float invR5 = invR2 * invR2 * invR;
     vec3 acc = (-1.5 * rs * h2 * invR5) * pos;
     if (kerrSpin > 0.0) {
-      acc += cross(uBhN * (kerrSpin / (r2 * r * r)), vel);
+      acc += cross(uBhN * (kerrSpin * invR2 * invR), vel);
     }
 
     vec3 prevPos = pos;
-    vel = normalize(vel + acc * dt);
+    vel += acc * dt;
+    vel *= inversesqrt(dot(vel, vel));
     pos += vel * dt;
     float hCurr = dot(pos, uBhN);
 
-    // Accretion disk crossing accumulation (primary + lensed upper/lower arches)
     if ((hPrev > 0.0 && hCurr <= 0.0) || (hPrev < 0.0 && hCurr >= 0.0)) {
       float frac = clamp(abs(hPrev) / max(1e-5, abs(hPrev - hCurr)), 0.0, 1.0);
       vec3 hitP = mix(prevPos, pos, frac);
@@ -241,7 +280,6 @@ void main() {
       }
     }
 
-    // Relativistic bipolar jet along live spin axis, scaled cleanly by Cygnus weight
     if (uWeights.z > 0.01) {
       vec3 locJ = toBhLocal(pos);
       float yAbs = abs(locJ.y);
@@ -260,20 +298,14 @@ void main() {
     }
   }
 
-  // Photon sphere glow around r ~ 1.52 * rs + horizon rim flare on particle absorption
   float photonRing = exp(-abs(minR - 1.52 * rs) * 6.0);
-  vec3 ringTint = vec3(1.00, 0.62, 0.22) * uWeights.x
-                + vec3(1.00, 0.82, 0.52) * uWeights.y
-                + vec3(0.45, 0.86, 1.00) * uWeights.z;
-
   if (!captured) {
-    accum += sampleLensedSky(vel, uWeights) * trans;
-    accum += ringTint * photonRing * (0.46 + uAbsorb * 0.55);
+    accum += sampleLensedSky(vel) * trans;
+    accum += uRingTint * photonRing * (0.46 + uAbsorb * 0.55);
   } else {
-    accum += ringTint * pow(photonRing, 2.2) * (0.16 + uAbsorb * 0.30) * trans;
+    accum += uRingTint * pow(photonRing, 2.2) * (0.16 + uAbsorb * 0.30) * trans;
   }
 
-  // Luminance-preserving soft compression into RGBA8 scene FBO before half-res HDR bloom
   float luma = dot(accum, vec3(0.2126, 0.7152, 0.0722));
   vec3 hdr = accum / (1.0 + luma * 0.42);
   fragColor = vec4(hdr, 1.0);
@@ -368,7 +400,6 @@ void main() {
   vec2 d = vUv - 0.5;
   col *= 1.0 - dot(d, d) * 0.30;
   col = pow(aces(col * 1.14), vec3(1.0 / 1.04));
-  // Interleaved Gradient Noise dithering prevents dark-sky banding
   float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   col += (ign - 0.5) / 255.0;
   fragColor = vec4(col, 1.0);
@@ -458,9 +489,6 @@ export class WebGL2Renderer {
         this.brightProg = null;
         this.blurProg = null;
         this.compProg = null;
-        this.cachedPartCount = -1;
-        this.cachedLineView = null;
-        this.cachedHeadView = null;
     }
 
     init(sim) {
@@ -500,8 +528,8 @@ export class WebGL2Renderer {
         this.quadVao = gl.createVertexArray();
         const sw = Math.max(2, this.canvas.width || 2);
         const sh = Math.max(2, this.canvas.height || 2);
-        const bw = Math.max(2, sw >> 1);
-        const bh = Math.max(2, sh >> 1);
+        const bw = Math.max(2, sw >> 2);
+        const bh = Math.max(2, sh >> 2);
         this.sceneFBO = createFBO(gl, sw, sh);
         this.bloomA = createFBO(gl, bw, bh);
         this.bloomB = createFBO(gl, bw, bh);
@@ -530,9 +558,6 @@ export class WebGL2Renderer {
         gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 28, 24);
 
         gl.bindVertexArray(null);
-        this.cachedPartCount = -1;
-        this.cachedLineView = null;
-        this.cachedHeadView = null;
         this.ready = true;
         return true;
     }
@@ -543,21 +568,38 @@ export class WebGL2Renderer {
 
         const cw = Math.max(2, this.canvas.width);
         const ch = Math.max(2, this.canvas.height);
+        const qW = Math.max(2, cw >> 2);
+        const qH = Math.max(2, ch >> 2);
         resizeFBO(gl, this.sceneFBO, cw, ch);
-        resizeFBO(gl, this.bloomA, Math.max(2, cw >> 1), Math.max(2, ch >> 1));
-        resizeFBO(gl, this.bloomB, Math.max(2, cw >> 1), Math.max(2, ch >> 1));
+        resizeFBO(gl, this.bloomA, qW, qH);
+        resizeFBO(gl, this.bloomB, qW, qH);
 
-        // 1. Render relativistic black hole + horizon oblivion particles into sceneFBO
+        // 1. Render relativistic black hole + outer-sky fast path into sceneFBO
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFBO.fbo);
         gl.viewport(0, 0, cw, ch);
         gl.disable(gl.BLEND);
+
+        const wM87 = sim.wM87, wGarg = sim.wGarg, wCyg = sim.wCyg;
+        const rIn = wM87 * 2.12 + wGarg * 2.20 + wCyg * 1.82;
+        const rOut = wM87 * 8.40 + wGarg * 8.20 + wCyg * 7.60;
+        const kerrSpin = wM87 * 0.08 + wGarg * 0.04 + wCyg * 0.22;
+        const omegaBase = wCyg * 2.05 + (1 - wCyg) * 1.55;
 
         const b = this.bhProg;
         const cam = sim.cam;
         gl.useProgram(b.program);
         gl.uniform2f(b.u.uRes, cw, ch);
         gl.uniform1f(b.u.uTime, sim.time);
-        gl.uniform3f(b.u.uWeights, sim.wM87, sim.wGarg, sim.wCyg);
+        gl.uniform3f(b.u.uWeights, wM87, wGarg, wCyg);
+        gl.uniform4f(b.u.uBhParams, rIn, rOut, kerrSpin, omegaBase);
+        gl.uniform3f(b.u.uRingTint,
+            1.00 * wM87 + 1.00 * wGarg + 0.45 * wCyg,
+            0.62 * wM87 + 0.82 * wGarg + 0.86 * wCyg,
+            0.22 * wM87 + 0.52 * wGarg + 1.00 * wCyg);
+        gl.uniform3f(b.u.uNebTint,
+            0.16 * wM87 + 0.10 * wGarg + 0.11 * wCyg,
+            0.14 * wM87 + 0.16 * wGarg + 0.25 * wCyg,
+            0.30 * wM87 + 0.34 * wGarg + 0.58 * wCyg);
         gl.uniform1f(b.u.uAbsorb, sim.absorbGlow);
         gl.uniform3f(b.u.uCamPos, cam.ro[0], cam.ro[1], cam.ro[2]);
         gl.uniform3f(b.u.uCamU, cam.uu[0], cam.uu[1], cam.uu[2]);
@@ -572,39 +614,33 @@ export class WebGL2Renderer {
         gl.bindVertexArray(this.quadVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-        // Additive relativistic particle trails & glowing plasma heads
-        const pCount = Math.min(config.MAX_PARTICLES, quality.maxParticles || config.MAX_PARTICLES);
-        if (pCount !== this.cachedPartCount
-            || !this.cachedLineView || this.cachedLineView.buffer !== sim.pLineBuf.buffer) {
-            this.cachedPartCount = pCount;
-            this.cachedLineView = pCount === config.MAX_PARTICLES ? sim.pLineBuf : sim.pLineBuf.subarray(0, pCount * 12);
-            this.cachedHeadView = pCount === config.MAX_PARTICLES ? sim.pHeadBuf : sim.pHeadBuf.subarray(0, pCount * 7);
+        // Compacted active-only particle GPU upload & draw
+        const drawCount = sim.drawCount;
+        if (drawCount > 0) {
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.ONE, gl.ONE);
+
+            gl.useProgram(this.partProg.program);
+            gl.bindVertexArray(this.lineVao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.lineVbo);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, sim.pLineBuf, 0, drawCount * 12);
+            gl.drawArrays(gl.LINES, 0, drawCount * 2);
+
+            const dpr = view.dpr || (this.canvas.clientWidth ? cw / this.canvas.clientWidth : 1);
+            gl.useProgram(this.partHeadProg.program);
+            gl.uniform1f(this.partHeadProg.u.uDpr, dpr);
+            gl.bindVertexArray(this.headVao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.headVbo);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, sim.pHeadBuf, 0, drawCount * 7);
+            gl.drawArrays(gl.POINTS, 0, drawCount);
         }
 
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.ONE, gl.ONE);
-
-        gl.useProgram(this.partProg.program);
-        gl.bindVertexArray(this.lineVao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.lineVbo);
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cachedLineView);
-        gl.drawArrays(gl.LINES, 0, pCount * 2);
-
-        const dpr = view.dpr || (this.canvas.clientWidth ? cw / this.canvas.clientWidth : 1);
-        gl.useProgram(this.partHeadProg.program);
-        gl.uniform1f(this.partHeadProg.u.uDpr, dpr);
-        gl.bindVertexArray(this.headVao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.headVbo);
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cachedHeadView);
-        gl.drawArrays(gl.POINTS, 0, pCount);
-
-        // 2. Half-res HDR Bloom passes
+        // 2. Quarter-res separable HDR Bloom (single 9-tap H+V Gaussian pass)
         gl.disable(gl.BLEND);
         gl.bindVertexArray(this.quadVao);
         if (quality.bloom) {
-            const bw = this.bloomA.w, bh = this.bloomA.h;
             gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomA.fbo);
-            gl.viewport(0, 0, bw, bh);
+            gl.viewport(0, 0, qW, qH);
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this.sceneFBO.tex);
             gl.useProgram(this.brightProg.program);
@@ -613,17 +649,16 @@ export class WebGL2Renderer {
 
             gl.useProgram(this.blurProg.program);
             gl.uniform1i(this.blurProg.u.uTex, 0);
-            for (let pass = 0; pass < 2; pass++) {
-                gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomB.fbo);
-                gl.bindTexture(gl.TEXTURE_2D, this.bloomA.tex);
-                gl.uniform2f(this.blurProg.u.uStep, 1.35 / bw, 0);
-                gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-                gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomA.fbo);
-                gl.bindTexture(gl.TEXTURE_2D, this.bloomB.tex);
-                gl.uniform2f(this.blurProg.u.uStep, 0, 1.35 / bh);
-                gl.drawArrays(gl.TRIANGLES, 0, 3);
-            }
+            gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomB.fbo);
+            gl.bindTexture(gl.TEXTURE_2D, this.bloomA.tex);
+            gl.uniform2f(this.blurProg.u.uStep, 1.45 / qW, 0);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+            gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomA.fbo);
+            gl.bindTexture(gl.TEXTURE_2D, this.bloomB.tex);
+            gl.uniform2f(this.blurProg.u.uStep, 0, 1.45 / qH);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
         }
 
         // 3. Final composite to screen (ACES + vignette + IGN dithering)
@@ -636,7 +671,7 @@ export class WebGL2Renderer {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, this.bloomA.tex);
         gl.uniform1i(this.compProg.u.uBloom, 1);
-        gl.uniform1f(this.compProg.u.uBloomStrength, quality.bloom ? 0.52 : 0.0);
+        gl.uniform1f(this.compProg.u.uBloomStrength, quality.bloom ? 0.56 : 0.0);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindVertexArray(null);
     }
@@ -673,22 +708,22 @@ export class Canvas2DRenderer {
         ctx.fillStyle = halo;
         ctx.fillRect(0, 0, w, h);
 
-        // Shadow disc
         ctx.fillStyle = '#020307';
         ctx.beginPath();
         ctx.arc(cx, cy, rShadow, 0, Math.PI * 2);
         ctx.fill();
 
-        // Additive particle streaks + heads driven by BlackHoleSimulation buffers
+        const drawCount = sim.drawCount;
+        if (drawCount <= 0) return;
+
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
         ctx.lineWidth = 1.15;
         const lBuf = sim.pLineBuf;
         const hBuf = sim.pHeadBuf;
-        for (let i = 0; i < config.MAX_PARTICLES; i++) {
+        for (let i = 0; i < drawCount; i++) {
             const ho = i * 7;
             const alpha = hBuf[ho + 5];
-            if (alpha < 0.03) continue;
             const lo = i * 12;
             const x0 = (lBuf[lo] * 0.5 + 0.5) * w;
             const y0 = (0.5 - lBuf[lo + 1] * 0.5) * h;

@@ -1,8 +1,8 @@
 // simulation.js
 // Pure DOM-free relativistic Black Hole + Paczynski-Wiita particle infall
 // simulation. Computes smoothly morphing disk basis vectors (stationary
-// sky-locked camera so stars never jump) and 3-state particle absorption
-// with gravitational time dilation and redshift oblivion fading.
+// sky-locked camera so stars never jump) and compacted 3-state particle
+// absorption buffers with time dilation and redshift oblivion fading.
 
 import { config } from './config.js';
 
@@ -18,7 +18,9 @@ export class BlackHoleSimulation {
         this.targetMood = 0;
         this.capturedCount = 0;
         this.activeCount = 0;
+        this.drawCount = 0;
         this._emitAccum = 0;
+        this._worldOut = new Float32Array(3);
 
         this.pointer = { x: 0.5, y: 0.5, vx: 0, vy: 0, down: false, strength: 0 };
 
@@ -119,12 +121,12 @@ export class BlackHoleSimulation {
         const roz = cam.dist * cosP * cosY;
         cam.ro[0] = rox; cam.ro[1] = roy; cam.ro[2] = roz;
 
-        const invR = 1 / (Math.hypot(rox, roy, roz) || 1);
+        const invR = 1 / (Math.sqrt(rox * rox + roy * roy + roz * roz) || 1);
         const wx = -rox * invR, wy = -roy * invR, wz = -roz * invR;
         cam.ww[0] = wx; cam.ww[1] = wy; cam.ww[2] = wz;
 
         let rx = -wz, rz = wx;
-        const invRx = 1 / (Math.hypot(rx, rz) || 1);
+        const invRx = 1 / (Math.sqrt(rx * rx + rz * rz) || 1);
         rx *= invRx; rz *= invRx;
 
         cam.uu[0] = rx; cam.uu[1] = 0; cam.uu[2] = rz;
@@ -133,7 +135,7 @@ export class BlackHoleSimulation {
         cam.vv[2] = rx * wy;
     }
 
-    cursorToWorld(nx, ny, out = [0, 0, 0]) {
+    cursorToWorld(nx, ny, out = this._worldOut) {
         const minDim = Math.max(1, Math.min(this.width, this.height));
         const uvx = (nx * this.width - 0.5 * this.width) / minDim;
         const uvy = ((1 - ny) * this.height - 0.5 * this.height) / minDim;
@@ -142,7 +144,7 @@ export class BlackHoleSimulation {
         const rdx = uvx * cam.uu[0] + uvy * cam.vv[0] + cam.fov * cam.ww[0];
         const rdy = uvx * cam.uu[1] + uvy * cam.vv[1] + cam.fov * cam.ww[1];
         const rdz = uvx * cam.uu[2] + uvy * cam.vv[2] + cam.fov * cam.ww[2];
-        const inv = 1 / (Math.hypot(rdx, rdy, rdz) || 1);
+        const inv = 1 / (Math.sqrt(rdx * rdx + rdy * rdy + rdz * rdz) || 1);
         const dx = rdx * inv, dy = rdy * inv, dz = rdz * inv;
 
         const denomDisk = dx * bhN[0] + dy * bhN[1] + dz * bhN[2];
@@ -153,8 +155,8 @@ export class BlackHoleSimulation {
                 const hx = cam.ro[0] + dx * tPlane;
                 const hy = cam.ro[1] + dy * tPlane;
                 const hz = cam.ro[2] + dz * tPlane;
-                const hr = Math.hypot(hx, hy, hz);
-                if (hr > 1.5 && hr < 10.5) {
+                const hr2 = hx * hx + hy * hy + hz * hz;
+                if (hr2 > 2.25 && hr2 < 110.25) {
                     const j = (Math.random() - 0.5) * 0.16;
                     out[0] = hx + bhN[0] * j;
                     out[1] = hy + bhN[1] * j;
@@ -176,7 +178,7 @@ export class BlackHoleSimulation {
         const idx = this.cursorIdx;
         this.cursorIdx = (this.cursorIdx + 1) % config.MAX_PARTICLES;
 
-        const r = Math.max(1.65, Math.hypot(x, y, z));
+        const r = Math.max(1.65, Math.sqrt(x * x + y * y + z * z));
         const dr = Math.max(0.32, r - 1.0);
         const vCirc = Math.sqrt((r * this.curGm) / (dr * dr)) * orbitalBoost;
 
@@ -185,12 +187,11 @@ export class BlackHoleSimulation {
         const rxp = x - hPlane * bhN[0];
         const ryp = y - hPlane * bhN[1];
         const rzp = z - hPlane * bhN[2];
-        const rPl = Math.hypot(rxp, ryp, rzp);
+        const rPl = Math.sqrt(rxp * rxp + ryp * ryp + rzp * rzp);
 
         const ux = rPl >= 0.25 ? rxp / rPl : bhT1[0];
         const uy = rPl >= 0.25 ? ryp / rPl : bhT1[1];
         const uz = rPl >= 0.25 ? rzp / rPl : bhT1[2];
-        // Cross product bhN x u matches evalDisk orbital direction (-locP.z, 0, locP.x)
         const tx = bhN[1] * uz - bhN[2] * uy;
         const ty = bhN[2] * ux - bhN[0] * uz;
         const tz = bhN[0] * uy - bhN[1] * ux;
@@ -208,9 +209,9 @@ export class BlackHoleSimulation {
     }
 
     emitCursorStream(nx, ny, vx, vy, count, speedSpread = 0.28, boost = 0.62) {
-        const pos = this.cursorToWorld(nx, ny);
-        const r = Math.hypot(pos[0], pos[1], pos[2]);
+        const pos = this.cursorToWorld(nx, ny, this._worldOut);
         let cx = pos[0], cy = pos[1], cz = pos[2];
+        const r = Math.sqrt(cx * cx + cy * cy + cz * cz);
         if (r < 1.65) {
             const s = 1.9 / Math.max(0.1, r);
             cx *= s; cy *= s; cz *= s;
@@ -305,19 +306,17 @@ export class BlackHoleSimulation {
         const minDim = Math.max(1, Math.min(this.width, this.height));
         const ndcScaleX = (2 * minDim) / this.width;
         const ndcScaleY = (2 * minDim) / this.height;
+        const camWorldRatio = cam.dist / cam.fov;
+        const tdDamp = Math.exp(-dt * 2.4);
+        const sink = 1 - dt * 0.48;
+        const fadeDecay = Math.exp(-dt * 2.0);
         const limit = Math.min(config.MAX_PARTICLES, maxParticles | 0);
         let alive = 0;
+        let drawIdx = 0;
 
         for (let i = 0; i < limit; i++) {
-            const lineOff = i * 12;
-            const headOff = i * 7;
             const state = pState[i];
-            if (state === 0) {
-                pLineBuf[lineOff + 5] = 0;
-                pLineBuf[lineOff + 11] = 0;
-                pHeadBuf[headOff + 5] = 0;
-                continue;
-            }
+            if (state === 0) continue;
 
             let x = px[i], y = py[i], z = pz[i];
             let vx = pvx[i], vy = pvy[i], vz = pvz[i];
@@ -326,19 +325,19 @@ export class BlackHoleSimulation {
 
             if (state === 1) {
                 for (let s = 0; s < 2; s++) {
-                    const r = Math.hypot(x, y, z);
+                    const r2 = x * x + y * y + z * z;
+                    const r = Math.sqrt(r2);
                     if (r <= capR) {
-                        // Enter horizon oblivion phase: time-dilate, redshift, and slowly vanish
                         pState[i] = 2;
                         fade = 1.0;
                         this.capturedCount++;
                         this.absorbGlow = Math.min(1.6, this.absorbGlow + 0.065);
                         break;
                     }
-                    const dr = Math.max(0.18, r - 1.0);
+                    const dr = r > 1.18 ? r - 1.0 : 0.18;
                     const aMag = -curGm / (dr * dr * r);
-                    const dragScale = Math.max(0.75, 1 - curDrag * subDt * (1 + 4.5 / (r * r)));
-                    const fd = curSpin / (r * r * r);
+                    const dragScale = Math.max(0.75, 1 - curDrag * subDt * (1 + 4.5 / r2));
+                    const fd = curSpin / (r2 * r);
                     const hPlane = x * bhN[0] + y * bhN[1] + z * bhN[2];
                     const fdx = (bhN[1] * z - bhN[2] * y) * fd;
                     const fdy = (bhN[2] * x - bhN[0] * z) * fd;
@@ -358,21 +357,18 @@ export class BlackHoleSimulation {
                 }
             }
 
-            if (pState[i] === 2) {
-                const tdDamp = Math.exp(-dt * 2.4);
+            const curState = pState[i];
+            if (curState === 2) {
                 vx *= tdDamp; vy *= tdDamp; vz *= tdDamp;
-                const sink = 1 - dt * 0.48;
                 x = x * sink + vx * dt;
                 y = y * sink + vy * dt;
                 z = z * sink + vz * dt;
-                fade *= Math.exp(-dt * 2.0);
+                fade *= fadeDecay;
             }
 
-            if (fade < 0.012 || age >= maxAge || Math.hypot(x, y, z) > 22) {
+            const r2Now = x * x + y * y + z * z;
+            if (fade < 0.012 || age >= maxAge || r2Now > 484) {
                 pState[i] = 0;
-                pLineBuf[lineOff + 5] = 0;
-                pLineBuf[lineOff + 11] = 0;
-                pHeadBuf[headOff + 5] = 0;
                 continue;
             }
 
@@ -384,19 +380,15 @@ export class BlackHoleSimulation {
 
             const dx = x - cam.ro[0], dy = y - cam.ro[1], dz = z - cam.ro[2];
             const zCam = dx * cam.ww[0] + dy * cam.ww[1] + dz * cam.ww[2];
-            if (zCam <= 0.6) {
-                pLineBuf[lineOff + 5] = 0;
-                pLineBuf[lineOff + 11] = 0;
-                pHeadBuf[headOff + 5] = 0;
-                continue;
-            }
+            if (zCam <= 0.6) continue;
 
             const xCam = dx * cam.uu[0] + dy * cam.uu[1] + dz * cam.uu[2];
             const yCam = dx * cam.vv[0] + dy * cam.vv[1] + dz * cam.vv[2];
-            let ax = (xCam * cam.fov) / zCam;
-            let ay = (yCam * cam.fov) / zCam;
+            const invZCam = cam.fov / zCam;
+            let ax = xCam * invZCam;
+            let ay = yCam * invZCam;
 
-            const bWorld = Math.hypot(ax, ay) * (cam.dist / cam.fov);
+            const bWorld = Math.sqrt(ax * ax + ay * ay) * camWorldRatio;
             const behind = clamp((zCam - cam.dist) * 0.45, 0, 1);
             let lensScale = 1;
             if (behind > 0.01 && bWorld > 0.08) {
@@ -408,21 +400,28 @@ export class BlackHoleSimulation {
 
             // Smooth behind-shadow eclipse occlusion
             const bProj = bWorld * lensScale;
-            const behindFade = clamp((zCam - (cam.dist + 0.1)) / 0.8, 0, 1);
-            const shadowMask = clamp((bProj - 2.05) / 0.70, 0, 1);
+            const behindFade = clamp((zCam - (cam.dist + 0.1)) * 1.25, 0, 1);
+            const shadowMask = clamp((bProj - 2.05) * 1.42857, 0, 1);
             const occ = 1 - behindFade * (1 - shadowMask);
+            if (occ <= 0.008) continue;
 
-            const vMag = Math.hypot(vx, vy, vz);
-            const tailDt = Math.min(0.052, 0.36 / Math.max(0.8, vMag))
-                * (pState[i] === 2 ? (1.0 + (1.0 - fade) * 1.4) : 1.0);
+            const rNow = Math.sqrt(r2Now);
+            const heat = clamp(1.85 / Math.max(1.05, rNow) - 0.14, 0, 1);
+            const fadeAgeIn = age < 0.2 ? age * 5.0 : 1;
+            const fadeAgeOut = age > (maxAge - 3) ? Math.max(0, (maxAge - age) / 3) : 1;
+            const alpha = occ * fadeAgeIn * fadeAgeOut * fade * (0.50 + 0.50 * heat);
+            if (alpha <= 0.006) continue;
+
+            const vMag = Math.sqrt(vx * vx + vy * vy + vz * vz);
+            const tailDt = Math.min(0.052, 0.36 / (vMag > 0.8 ? vMag : 0.8))
+                * (curState === 2 ? (1.0 + (1.0 - fade) * 1.4) : 1.0);
             const txW = x - vx * tailDt, tyW = y - vy * tailDt, tzW = z - vz * tailDt;
             const tdx = txW - cam.ro[0], tdy = tyW - cam.ro[1], tdz = tzW - cam.ro[2];
             const tzCam = Math.max(0.6, tdx * cam.ww[0] + tdy * cam.ww[1] + tdz * cam.ww[2]);
-            const tax = ((tdx * cam.uu[0] + tdy * cam.uu[1] + tdz * cam.uu[2]) * cam.fov / tzCam) * lensScale;
-            const tay = ((tdx * cam.vv[0] + tdy * cam.vv[1] + tdz * cam.vv[2]) * cam.fov / tzCam) * lensScale;
+            const invTzScale = (cam.fov / tzCam) * lensScale;
+            const tax = (tdx * cam.uu[0] + tdy * cam.uu[1] + tdz * cam.uu[2]) * invTzScale;
+            const tay = (tdx * cam.vv[0] + tdy * cam.vv[1] + tdz * cam.vv[2]) * invTzScale;
 
-            const rNow = Math.hypot(x, y, z);
-            const heat = clamp(1.85 / Math.max(1.05, rNow) - 0.14, 0, 1);
             const warmR = 0.96 + heat * 0.04;
             const warmG = 0.44 + heat * 0.52;
             const warmB = 0.14 + heat * heat * 0.84;
@@ -433,17 +432,15 @@ export class BlackHoleSimulation {
             let cg = warmG + (cygG - warmG) * wCyg;
             let cb = warmB + (cygB - warmB) * wCyg;
 
-            if (pState[i] === 2) {
-                cr *= Math.pow(fade, 0.75);
-                cg *= Math.pow(fade, 1.45);
-                cb *= Math.pow(fade, 2.35);
+            if (curState === 2) {
+                const sF = Math.sqrt(fade);
+                cr *= Math.sqrt(sF) * sF; // fade^0.75
+                cg *= fade * sF;           // fade^1.50
+                cb *= fade * fade * sF;    // fade^2.50
             }
 
-            const fadeAgeIn = Math.min(1, age * 5.0);
-            const fadeAgeOut = age > (maxAge - 3) ? Math.max(0, (maxAge - age) / 3) : 1;
-            const alpha = occ * fadeAgeIn * fadeAgeOut * fade * (0.50 + 0.50 * heat);
-
             const ndcHx = ax * ndcScaleX, ndcHy = ay * ndcScaleY;
+            const lineOff = drawIdx * 12;
             pLineBuf[lineOff] = tax * ndcScaleX;
             pLineBuf[lineOff + 1] = tay * ndcScaleY;
             pLineBuf[lineOff + 2] = cr; pLineBuf[lineOff + 3] = cg; pLineBuf[lineOff + 4] = cb;
@@ -454,14 +451,17 @@ export class BlackHoleSimulation {
             pLineBuf[lineOff + 8] = cr; pLineBuf[lineOff + 9] = cg; pLineBuf[lineOff + 10] = cb;
             pLineBuf[lineOff + 11] = alpha * 0.86;
 
+            const headOff = drawIdx * 7;
             pHeadBuf[headOff] = ndcHx;
             pHeadBuf[headOff + 1] = ndcHy;
             pHeadBuf[headOff + 2] = cr; pHeadBuf[headOff + 3] = cg; pHeadBuf[headOff + 4] = cb;
             pHeadBuf[headOff + 5] = alpha;
-            pHeadBuf[headOff + 6] = pSize[i] * (0.85 + 0.45 * heat) * (pState[i] === 2 ? (0.35 + 0.65 * fade) : 1.0);
+            pHeadBuf[headOff + 6] = pSize[i] * (0.85 + 0.45 * heat) * (curState === 2 ? (0.35 + 0.65 * fade) : 1.0);
+            drawIdx++;
         }
 
         this.activeCount = alive;
+        this.drawCount = drawIdx;
     }
 
     update(dt, quality = {}, parallax = { x: 0, y: 0 }) {

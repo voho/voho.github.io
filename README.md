@@ -13,7 +13,7 @@ A real-time general-relativistic Black Hole and particle absorption simulation r
   - smoothly interpolated black hole orientation basis `(bhT1, bhN, bhT2)` and continuous preset weights (`wM87`, `wGarg`, `wCyg`) decoupling accretion geometry from the sky-locked camera so background stars never jump on link hover;
   - up to `1,000` cursor- and click-emitted 3D particles integrated under the **Paczyński–Wiita** potential with plane settling and Kerr frame-dragging;
   - a 3-state oblivion absorption lifecycle (`pState = 2`): infalling stars time-dilate, redshift across color channels, fade smoothly into darkness, and flare the photon ring/jets (`absorbGlow`).
-- `renderer.js` — `WebGL2Renderer` (single-pass 96-step Schwarzschild/Kerr null-geodesic raymarcher with multi-band Doppler-beamed accretion disk, Einstein-lensed 3D starfield, smooth `Cygnus X-1` bipolar jets, additive Airy particle trails/cores, half-res separable HDR bloom, and ACES + IGN dithering) plus a `Canvas2DRenderer` graceful fallback driven by the same simulation state.
+- `renderer.js` — `WebGL2Renderer` (72-step Schwarzschild/Kerr null-geodesic raymarcher with analytic outer-sky lensing fast path, Doppler-beamed multi-band accretion disk, Einstein-lensed 3D starfield, smooth `Cygnus X-1` bipolar jets, compacted active particle draws, quarter-res separable HDR bloom, and ACES + IGN dithering) plus a `Canvas2DRenderer` graceful fallback driven by the same simulation state.
 - `script.js` — WebGL2 initialization, `webglcontextlost` fallback/recovery, `100lvh`-safe responsive sizing, pointer/hold particle streaming, device tilt parallax, link/button hover spacetime transitions, FPS quality governor, and `prefers-reduced-motion` handling.
 
 ## Interaction
@@ -25,8 +25,8 @@ A real-time general-relativistic Black Hole and particle absorption simulation r
 
 ## Graceful degradation & accessibility
 
-1. **WebGL2 (Full)** — 96-step relativistic geodesic raymarch + half-res HDR bloom + 1,000 relativistic particles + `1.5` max DPR.
-2. **Quality Governor** — steps down bloom, raymarch steps (`76 -> 60`), `maxDpr`, and particle budget (`500`) if FPS drops below threshold.
+1. **WebGL2 (Full)** — 72-step relativistic geodesic raymarch + analytic sky lensing + quarter-res HDR bloom + compacted particle draws + `1.5` max DPR.
+2. **Quality Governor** — steps down bloom, raymarch steps (`56 -> 44`), `maxDpr`, and particle budget (`500`) if FPS drops below threshold.
 3. **Canvas 2D Fallback** — automatically activates when WebGL2 is unavailable or context is lost.
 4. **`prefers-reduced-motion`** — renders a single settled static frame with no animation loop.
 
