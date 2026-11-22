@@ -1,11 +1,14 @@
 // renderer.js
-// Unified renderer: WebGL2 (3D raymarched Turing core + Navier-Stokes fluid
-// environment reflections + additive Lagrangian tracers) and a matching
-// Canvas 2D fallback driven by the exact same CoupledSimulation state.
+// Unified high-performance renderer:
+//   - WebGL2: precomputed core rotation matrix, analytical shell skip,
+//     tetrahedral SDF normals, early core-hit background skip, 3-tap fluid
+//     composite, vertex-shaded tracer palette, and cached buffer views
+//   - Canvas2DRenderer: graceful fallback with precomputed 128x128 sphere LUT
 
 import { config } from './config.js';
 
 const TAU = Math.PI * 2;
+const SPHERE_LUT_SIZE = 128;
 
 function clamp(x, lo, hi) {
     return x < lo ? lo : x > hi ? hi : x;
@@ -40,59 +43,46 @@ uniform float uCoreScale;
 uniform float uCamZ;
 uniform float uCamFov;
 uniform float uCoreRadius;
-uniform float uCoreSpin;
 uniform float uMarchSteps;
-
-mat2 rot2(float a) {
-  float c = cos(a), s = sin(a);
-  return mat2(c, -s, s, c);
-}
+uniform mat3 uCoreRot;
 
 float sdOctahedron(vec3 p, float s) {
   p = abs(p);
   return (p.x + p.y + p.z - s) * 0.57735027;
 }
 
-vec2 sphereUv(vec3 q) {
-  float len = max(1e-4, length(q));
-  float u = atan(q.z, q.x) / 6.2831853 + 0.5;
-  float v = acos(clamp(q.y / len, -1.0, 1.0)) / 3.14159265;
-  return vec2(u, v);
+vec4 sampleSimLocal(vec3 q, float len) {
+  vec2 suv = vec2(atan(q.z, q.x) * 0.159154943 + 0.5,
+                  acos(clamp(q.y / max(1e-4, len), -1.0, 1.0)) * 0.318309886);
+  return textureLod(uSimTex, suv, 0.0);
 }
 
-vec4 sampleSim(vec3 q) {
-  vec3 rq = q;
-  rq.xz *= rot2(uTime * uCoreSpin);
-  rq.xy *= rot2(sin(uTime * 0.11) * 0.14);
-  return textureLod(uSimTex, sphereUv(rq), 0.0);
-}
+float mapCoreLocal(vec3 q) {
+  float len = length(q);
+  float shellDist = len - uCoreRadius;
+  // Analytical shell skip outside max Turing/crystal envelope
+  if (shellDist > 0.40) return shellDist - 0.28;
 
-float mapCore(vec3 p) {
-  float seedScale = mix(0.26, 1.0, 1.0 - exp(-uIgniteT * 3.1));
-  float scale = max(0.05, seedScale * uCoreScale);
-  vec3 q = p / scale;
-
-  vec4 sim = sampleSim(q);
+  vec4 sim = sampleSimLocal(q, len);
   float morph = sim.r;
   float wave = (sim.b - 0.5) * 2.0;
 
-  float sphere = length(q) - uCoreRadius;
-  vec3 rq = q;
-  rq.xz *= rot2(uTime * uCoreSpin);
-  float crystal = sdOctahedron(rq, uCoreRadius * 1.32) - 0.11;
   float facetAmt = clamp(0.10 + uMood.x * 0.34 - uMood.y * 0.08, 0.02, 0.45);
-  float base = mix(sphere, crystal, facetAmt);
-
-  return (base - morph * 0.14 - wave * 0.072) * 0.72 * scale;
+  float crystal = sdOctahedron(q, uCoreRadius * 1.32) - 0.11;
+  float base = mix(shellDist, crystal, facetAmt);
+  return (base - morph * 0.14 - wave * 0.072) * 0.72;
 }
 
-vec3 calcNormal(vec3 p) {
-  const float e = 0.003;
-  return normalize(vec3(
-    mapCore(p + vec3(e, 0.0, 0.0)) - mapCore(p - vec3(e, 0.0, 0.0)),
-    mapCore(p + vec3(0.0, e, 0.0)) - mapCore(p - vec3(0.0, e, 0.0)),
-    mapCore(p + vec3(0.0, 0.0, e)) - mapCore(p - vec3(0.0, 0.0, e))
-  ));
+// 4-tap tetrahedral gradient normal (33% fewer taps than central difference)
+vec3 calcNormalLocal(vec3 q) {
+  const float h = 0.0032;
+  const vec2 k = vec2(1.0, -1.0);
+  return normalize(
+    k.xyy * mapCoreLocal(q + k.xyy * h) +
+    k.yyx * mapCoreLocal(q + k.yyx * h) +
+    k.yxy * mapCoreLocal(q + k.yxy * h) +
+    k.xxx * mapCoreLocal(q + k.xxx * h)
+  );
 }
 
 float hash21(vec2 p) {
@@ -105,33 +95,27 @@ float starField(vec2 uv, float scale) {
   vec2 gv = fract(uv * scale) - 0.5;
   vec2 id = floor(uv * scale);
   float h = hash21(id);
-  if (h < 0.85) return 0.0;
+  if (h < 0.80) return 0.0;
   vec2 off = vec2(hash21(id + 2.1), hash21(id + 9.4)) - 0.5;
   float d = length(gv - off * 0.65);
   float tw = 0.55 + 0.45 * sin(uTime * (1.3 + h * 1.9) + h * 25.0);
-  return smoothstep(0.075, 0.0, d) * tw;
+  return smoothstep(0.075, 0.0, d) * tw * (0.45 + 0.55 * fract(h * 17.0));
 }
 
 vec3 thinFilm(float x, float shift) {
   return 0.5 + 0.5 * cos(6.28318 * (x * 1.4 + shift + vec3(0.0, 0.33, 0.67)));
 }
 
-vec3 sampleFluid(vec2 uv) {
+vec3 sampleFluidFast(vec2 uv) {
   vec4 c0 = texture(uFluidTex, uv);
-  vec4 c1 = texture(uFluidTex, uv + vec2(uFluidTexel.x, 0.0));
-  vec4 c2 = texture(uFluidTex, uv - vec2(uFluidTexel.x, 0.0));
-  vec4 c3 = texture(uFluidTex, uv + vec2(0.0, uFluidTexel.y));
-  vec4 c4 = texture(uFluidTex, uv - vec2(0.0, uFluidTexel.y));
-  vec4 fluid = c0 * 0.44 + (c1 + c2 + c3 + c4) * 0.14;
-
   vec2 disp = normalize(uv - 0.5 + 1e-4) * uFluidTexel * 0.85;
   float rD = texture(uFluidTex, uv + disp).r;
   float bD = texture(uFluidTex, uv - disp).b;
-  vec3 dye = vec3(mix(fluid.r, rD, 0.45), fluid.g, mix(fluid.b, bD, 0.45));
+  vec3 dye = vec3(mix(c0.r, rD, 0.5), c0.g, mix(c0.b, bD, 0.5));
 
   vec3 vortTint = mix(vec3(0.45, 0.85, 1.0), vec3(0.30, 0.96, 0.78), uMood.y);
   vortTint = mix(vortTint, vec3(0.55, 0.68, 1.0), uMood.x);
-  return dye + vortTint * fluid.a * 0.38;
+  return dye + vortTint * c0.a * 0.40;
 }
 
 vec3 aces(vec3 x) {
@@ -143,97 +127,95 @@ void main() {
   vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / minDim;
   vec2 ptr = (uPointer - 0.5) * vec2(uRes.x / minDim, uRes.y / minDim);
 
-  // Subtle backdrop + twinkling starfield
-  vec3 bg = mix(vec3(0.015, 0.022, 0.048), vec3(0.032, 0.054, 0.112), 1.0 - clamp(vUv.y, 0.0, 1.0));
-  float stars = starField(uv + uParallax * 0.015 + uTime * 0.0022, 9.0) * 0.55
-              + starField(uv * 1.35 - uTime * 0.0018, 14.0) * 0.35;
-  bg += vec3(0.75, 0.88, 1.0) * stars * 0.45;
-
-  // Add live Navier-Stokes fluid plumes with gentle center readability guard
-  vec3 fluidCol = sampleFluid(vUv);
-  float centerGuard = mix(0.64, 1.0, smoothstep(0.14, 0.56, length(uv * vec2(0.76, 1.12))));
-  bg += fluidCol * 1.08 * centerGuard;
-
-  vec3 moodAura = mix(vec3(0.28, 0.60, 1.0), vec3(0.18, 0.88, 0.72), uMood.y);
-  moodAura = mix(moodAura, vec3(0.36, 0.78, 1.0), uMood.x);
-  bg += moodAura * exp(-dot(uv, uv) * 2.4) * 0.14;
-
-  // Raymarch central 3D Turing obsidian core
+  // Ray setup & core raymarch FIRST so solid core pixels skip background work
   vec3 ro = vec3(uParallax.x * 0.16, uParallax.y * 0.16, uCamZ);
-  vec3 ta = vec3(0.0);
-  vec3 ww = normalize(ta - ro);
+  vec3 ww = normalize(-ro);
   vec3 uu = normalize(cross(vec3(0.0, 1.0, 0.0), ww));
   vec3 vv = cross(ww, uu);
   vec3 rd = normalize(uv.x * uu + uv.y * vv + uCamFov * ww);
 
+  float seedScale = mix(0.26, 1.0, 1.0 - exp(-uIgniteT * 3.1));
+  float invScale = 1.0 / max(0.05, seedScale * uCoreScale);
   float boundR = 1.42 * uCoreScale;
   float b = dot(ro, rd);
   float c = dot(ro, ro) - boundR * boundR;
   float h = b * b - c;
 
-  vec3 col = bg;
+  vec3 moodAura = mix(vec3(0.28, 0.60, 1.0), vec3(0.18, 0.88, 0.72), uMood.y);
+  moodAura = mix(moodAura, vec3(0.36, 0.78, 1.0), uMood.x);
+
+  bool hit = false;
+  float minD = 1e6;
+  vec3 qHit = vec3(0.0);
+
   if (h > 0.0) {
+    vec3 roL = uCoreRot * (ro * invScale);
+    vec3 rdL = uCoreRot * (rd * invScale);
     float tStart = max(0.0, -b - sqrt(h));
     float tEnd = -b + sqrt(h);
     float t = tStart;
-    float minD = 1e6;
-    bool hit = false;
     int maxSteps = int(uMarchSteps);
 
     for (int i = 0; i < 48; i++) {
       if (i >= maxSteps) break;
-      vec3 p = ro + rd * t;
-      float d = mapCore(p);
-      minD = min(minD, d);
-      if (d < 0.003) {
+      vec3 q = roL + rdL * t;
+      float dLocal = mapCoreLocal(q);
+      minD = min(minD, dLocal);
+      if (dLocal < 0.003) {
         hit = true;
+        qHit = q;
         break;
       }
-      t += d;
+      t += dLocal / invScale;
       if (t > tEnd) break;
-    }
-
-    float rimAura = exp(-max(0.0, minD) * 7.5) * 0.28;
-    col += moodAura * rimAura;
-
-    if (hit) {
-      vec3 p = ro + rd * t;
-      vec3 N = calcNormal(p);
-      vec3 V = -rd;
-      vec4 sim = sampleSim(p / max(0.05, uCoreScale));
-      float morph = sim.r;
-      float wave = abs(sim.b - 0.5) * 2.0;
-      float ridge = sim.a;
-
-      vec3 L1 = normalize(vec3(ptr.x * 2.1 + 0.5, ptr.y * 2.1 + 0.6, 1.6));
-      vec3 L2 = normalize(vec3(-1.3 * cos(uTime * 0.3), -0.9, 1.1));
-
-      float ndv = max(dot(N, V), 0.0);
-      float fresnel = pow(1.0 - ndv, 2.7);
-      float spec1 = pow(max(dot(reflect(-L1, N), V), 0.0), 34.0);
-      float spec2 = pow(max(dot(reflect(-L2, N), V), 0.0), 20.0);
-
-      float moodPhase = uMood.x * 0.18 - uMood.y * 0.28;
-      vec3 irid = thinFilm(1.0 - ndv + morph * 0.45 + dot(N, L1) * 0.2, uTime * 0.05 + moodPhase);
-
-      // Sample live Navier-Stokes fluid reflected across the glossy obsidian core
-      vec2 reflUv = clamp(vUv + N.xy * 0.22, 0.02, 0.98);
-      vec3 fluidRefl = texture(uFluidTex, reflUv).rgb;
-
-      // Deep dark obsidian interior keeps white center typography ultra-legible
-      vec3 surf = vec3(0.013, 0.019, 0.040);
-      surf += irid * fresnel * 1.05;
-      surf += fluidRefl * (0.28 + 0.72 * fresnel) * 0.85;
-      float vein = smoothstep(0.28, 0.88, morph) * 0.20 + ridge * 0.26 + wave * 0.32;
-      surf += irid * vein * (0.35 + 0.65 * fresnel);
-      surf += mix(vec3(0.48, 0.84, 1.0), irid, 0.5) * spec1 * (1.1 + 0.3 * uPointerStrength);
-      surf += mix(vec3(0.75, 0.42, 1.0), vec3(0.20, 0.92, 0.72), uMood.y) * spec2 * 0.55;
-
-      col = mix(bg, surf, 0.97);
     }
   }
 
-  // Subtle ignite shockwave shell
+  vec3 col;
+  if (hit) {
+    vec3 NL = calcNormalLocal(qHit);
+    vec3 N = NL * uCoreRot; // uCoreRot is orthonormal: transpose == inverse
+    vec3 V = -rd;
+    vec4 sim = sampleSimLocal(qHit, length(qHit));
+    float morph = sim.r;
+    float wave = abs(sim.b - 0.5) * 2.0;
+    float ridge = sim.a;
+
+    vec3 L1 = normalize(vec3(ptr.x * 2.1 + 0.5, ptr.y * 2.1 + 0.6, 1.6));
+    vec3 L2 = normalize(vec3(-1.3 * cos(uTime * 0.3), -0.9, 1.1));
+
+    float ndv = max(dot(N, V), 0.0);
+    float fresnel = pow(1.0 - ndv, 2.7);
+    float spec1 = pow(max(dot(reflect(-L1, N), V), 0.0), 34.0);
+    float spec2 = pow(max(dot(reflect(-L2, N), V), 0.0), 20.0);
+
+    float moodPhase = uMood.x * 0.18 - uMood.y * 0.28;
+    vec3 irid = thinFilm(1.0 - ndv + morph * 0.45 + dot(N, L1) * 0.2, uTime * 0.05 + moodPhase);
+
+    vec2 reflUv = clamp(vUv + N.xy * 0.22, 0.02, 0.98);
+    vec3 fluidRefl = texture(uFluidTex, reflUv).rgb;
+
+    col = vec3(0.013, 0.019, 0.040);
+    col += irid * fresnel * 1.05;
+    col += fluidRefl * (0.28 + 0.72 * fresnel) * 0.85;
+    float vein = smoothstep(0.28, 0.88, morph) * 0.20 + ridge * 0.26 + wave * 0.32;
+    col += irid * vein * (0.35 + 0.65 * fresnel);
+    col += mix(vec3(0.48, 0.84, 1.0), irid, 0.5) * spec1 * (1.1 + 0.3 * uPointerStrength);
+    col += mix(vec3(0.75, 0.42, 1.0), vec3(0.20, 0.92, 0.72), uMood.y) * spec2 * 0.55;
+  } else {
+    col = mix(vec3(0.015, 0.022, 0.048), vec3(0.032, 0.054, 0.112), 1.0 - clamp(vUv.y, 0.0, 1.0));
+    float stars = starField(uv + uParallax * 0.015 + uTime * 0.0022, 10.5);
+    col += vec3(0.75, 0.88, 1.0) * stars * 0.48;
+
+    vec3 fluidCol = sampleFluidFast(vUv);
+    float centerGuard = mix(0.64, 1.0, smoothstep(0.14, 0.56, length(uv * vec2(0.76, 1.12))));
+    col += fluidCol * 1.08 * centerGuard;
+    col += moodAura * exp(-dot(uv, uv) * 2.4) * 0.14;
+    if (h > 0.0) {
+      col += moodAura * exp(-max(0.0, minD) * 7.5) * 0.28;
+    }
+  }
+
   if (uIgniteT < 1.8) {
     float ignRing = exp(-pow((length(uv) - uIgniteT * 0.68) * 14.0, 2.0)) * exp(-uIgniteT * 1.9);
     col += thinFilm(uIgniteT, 0.2) * ignRing * 0.36;
@@ -250,18 +232,8 @@ precision highp float;
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec3 aMeta; // speedNorm, hueShift, alpha
 uniform float uPointScale;
-out vec3 vMeta;
-void main() {
-  gl_Position = vec4(aPos * 2.0 - 1.0, 0.0, 1.0);
-  gl_PointSize = clamp((1.35 + aMeta.x * 2.0) * uPointScale, 1.3, 4.6);
-  vMeta = aMeta;
-}`,
-
-    TRACER_FS: `#version 300 es
-precision highp float;
-in vec3 vMeta;
 uniform vec2 uMood;
-out vec4 fragColor;
+out vec4 vColor;
 
 vec3 palette(float t) {
   vec3 base = 0.54 + 0.44 * cos(6.28318 * (t + vec3(0.08, 0.34, 0.68)));
@@ -273,13 +245,23 @@ vec3 palette(float t) {
 }
 
 void main() {
+  gl_Position = vec4(aPos * 2.0 - 1.0, 0.0, 1.0);
+  gl_PointSize = clamp((1.35 + aMeta.x * 2.0) * uPointScale, 1.3, 4.6);
+  vColor = vec4(palette(aMeta.y), aMeta.z);
+}`,
+
+    TRACER_FS: `#version 300 es
+precision highp float;
+in vec4 vColor;
+out vec4 fragColor;
+void main() {
   vec2 d = gl_PointCoord * 2.0 - 1.0;
   float r2 = dot(d, d);
   if (r2 > 1.0) discard;
-  float w = exp(-r2 * 3.0);
-  vec3 col = palette(vMeta.y);
-  float a = w * vMeta.z;
-  fragColor = vec4(col * a, a);
+  float w = 1.0 - r2;
+  w *= w;
+  float a = w * vColor.a;
+  fragColor = vec4(vColor.rgb * a, a);
 }`,
 };
 
@@ -342,6 +324,9 @@ export class WebGL2Renderer {
         this.tracerVbo = null;
         this.mainProg = null;
         this.tracerProg = null;
+        this.coreRot = new Float32Array(9);
+        this.cachedTracerCount = -1;
+        this.cachedTracerView = null;
     }
 
     init(sim) {
@@ -387,8 +372,21 @@ export class WebGL2Renderer {
         gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 20, 8);
         gl.bindVertexArray(null);
 
+        this.cachedTracerCount = -1;
+        this.cachedTracerView = null;
         this.ready = true;
         return true;
+    }
+
+    _updateCoreRot(t) {
+        const a = t * config.CORE_SPIN_RAD_S;
+        const b = Math.sin(t * 0.11) * 0.14;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const cb = Math.cos(b), sb = Math.sin(b);
+        const m = this.coreRot;
+        m[0] = ca * cb;  m[1] = ca * sb;  m[2] = sa;
+        m[3] = -sb;      m[4] = cb;       m[5] = 0;
+        m[6] = -sa * cb; m[7] = -sa * sb; m[8] = ca;
     }
 
     render(sim, view, quality) {
@@ -413,6 +411,8 @@ export class WebGL2Renderer {
         gl.bindTexture(gl.TEXTURE_2D, this.simTex);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, sim.tw, sim.th, gl.RGBA, gl.UNSIGNED_BYTE, sim.turingTexBytes);
 
+        this._updateCoreRot(sim.time);
+
         const m = this.mainProg;
         gl.useProgram(m.program);
         gl.uniform1i(m.u.uFluidTex, 0);
@@ -429,14 +429,18 @@ export class WebGL2Renderer {
         gl.uniform1f(m.u.uCamZ, config.CORE_CAM_Z);
         gl.uniform1f(m.u.uCamFov, config.CORE_CAM_FOV);
         gl.uniform1f(m.u.uCoreRadius, config.CORE_WORLD_RADIUS);
-        gl.uniform1f(m.u.uCoreSpin, config.CORE_SPIN_RAD_S);
         gl.uniform1f(m.u.uMarchSteps, quality.marchSteps);
+        gl.uniformMatrix3fv(m.u.uCoreRot, false, this.coreRot);
 
         gl.bindVertexArray(this.quadVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-        // Additive Lagrangian fluid tracers wrapping around the obsidian core
-        if (quality.tracers > 0) {
+        const tCount = quality.tracers;
+        if (tCount > 0) {
+            if (tCount !== this.cachedTracerCount || !this.cachedTracerView || this.cachedTracerView.buffer !== sim.tracerBuf.buffer) {
+                this.cachedTracerCount = tCount;
+                this.cachedTracerView = sim.tracerBuf.subarray(0, tCount * 5);
+            }
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.ONE, gl.ONE);
             const tr = this.tracerProg;
@@ -445,8 +449,8 @@ export class WebGL2Renderer {
             gl.uniform2f(tr.u.uMood, sim.wLinkedIn, sim.wSpotify);
             gl.bindVertexArray(this.tracerVao);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.tracerVbo);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, sim.tracerBuf.subarray(0, quality.tracers * 5));
-            gl.drawArrays(gl.POINTS, 0, quality.tracers);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cachedTracerView);
+            gl.drawArrays(gl.POINTS, 0, tCount);
             gl.bindVertexArray(null);
         }
     }
@@ -461,6 +465,44 @@ export class Canvas2DRenderer {
         this.imgData = null;
         this.gw = 0;
         this.gh = 0;
+
+        // Precomputed 128x128 unit-sphere lookup table for fast 1-drawImage core blit
+        const S = SPHERE_LUT_SIZE;
+        this.sphereCanvas = document.createElement('canvas');
+        this.sphereCanvas.width = S;
+        this.sphereCanvas.height = S;
+        this.sphereCtx = this.sphereCanvas.getContext('2d');
+        this.sphereImg = this.sphereCtx.createImageData(S, S);
+
+        const maxDisc = S * S;
+        const pix = new Int32Array(maxDisc);
+        const nxArr = new Float32Array(maxDisc);
+        const nzArr = new Float32Array(maxDisc);
+        const gyArr = new Uint8Array(maxDisc);
+        const fresArr = new Float32Array(maxDisc);
+        let count = 0;
+        const half = S * 0.5;
+        for (let py = 0; py < S; py++) {
+            const ny = 1 - ((py + 0.5) / half);
+            for (let px = 0; px < S; px++) {
+                const nx = ((px + 0.5) / half) - 1;
+                const r2 = nx * nx + ny * ny;
+                if (r2 > 1) continue;
+                const nz = Math.sqrt(1 - r2);
+                pix[count] = (py * S + px) * 4;
+                nxArr[count] = nx;
+                nzArr[count] = nz;
+                gyArr[count] = Math.min(config.TURING_H - 1, ((Math.acos(clamp(ny, -1, 1)) / Math.PI) * config.TURING_H) | 0);
+                fresArr[count] = Math.pow(1 - nz, 2.2);
+                count++;
+            }
+        }
+        this.lutCount = count;
+        this.lutPix = pix.subarray(0, count);
+        this.lutNx = nxArr.subarray(0, count);
+        this.lutNz = nzArr.subarray(0, count);
+        this.lutGy = gyArr.subarray(0, count);
+        this.lutFres = fresArr.subarray(0, count);
     }
 
     _syncOffscreen(gw, gh) {
@@ -477,7 +519,6 @@ export class Canvas2DRenderer {
         if (!ctx) return;
         const w = view.w, h = view.h;
 
-        // 1. Draw live Navier-Stokes dye field smoothly scaled
         this._syncOffscreen(sim.gw, sim.gh);
         const data = this.imgData.data;
         const bytes = sim.fluidTexBytes;
@@ -487,9 +528,12 @@ export class Canvas2DRenderer {
             for (let i = 0; i < sim.gw; i++) {
                 const s = (srcRow + i) * 4;
                 const d = (dstRow + i) * 4;
-                data[d] = Math.min(255, 7 + bytes[s] + (bytes[s + 3] >> 2));
-                data[d + 1] = Math.min(255, 11 + bytes[s + 1] + (bytes[s + 3] >> 1));
-                data[d + 2] = Math.min(255, 22 + bytes[s + 2] + bytes[s + 3]);
+                const r = 7 + bytes[s] + (bytes[s + 3] >> 2);
+                const g = 11 + bytes[s + 1] + (bytes[s + 3] >> 1);
+                const b = 22 + bytes[s + 2] + bytes[s + 3];
+                data[d] = r > 255 ? 255 : r;
+                data[d + 1] = g > 255 ? 255 : g;
+                data[d + 2] = b > 255 ? 255 : b;
                 data[d + 3] = 255;
             }
         }
@@ -497,17 +541,17 @@ export class Canvas2DRenderer {
         ctx.imageSmoothingEnabled = true;
         ctx.drawImage(this.off, 0, 0, w, h);
 
-        // 2. Additive tracer streak subset
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
         ctx.fillStyle = 'rgba(145, 220, 255, 0.5)';
         const tracerDraw = Math.min(550, config.TRACER_COUNT);
+        const tx = sim.tx, ty = sim.ty;
         for (let i = 0; i < tracerDraw; i++) {
-            ctx.fillRect(sim.tx[i] * w, (1 - sim.ty[i]) * h, 1.5, 1.5);
+            ctx.fillRect(tx[i] * w, (1 - ty[i]) * h, 1.5, 1.5);
         }
         ctx.restore();
 
-        // 3. Projected 2D obsidian Turing core with live Gray-Scott + Wave PDE
+        // Blit precomputed 128x128 obsidian Turing core with zero per-pixel fillRects
         const minDim = Math.min(w, h);
         const R = minDim * sim.coreScreenRadiusFrac;
         const cx = w * 0.5 - view.parallax.x * 8;
@@ -519,46 +563,44 @@ export class Canvas2DRenderer {
         ctx.fillStyle = aura;
         ctx.fillRect(0, 0, w, h);
 
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(cx, cy, R, 0, TAU);
-        ctx.clip();
-        ctx.fillStyle = '#060a16';
-        ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
-
-        const step = 4;
+        const sData = this.sphereImg.data;
+        const lutCount = this.lutCount;
+        const lutPix = this.lutPix, lutNx = this.lutNx, lutNz = this.lutNz;
+        const lutGy = this.lutGy, lutFres = this.lutFres;
+        const gsV = sim.gsV, waveH = sim.waveH;
+        const tw = sim.tw;
         const a = -sim.time * config.CORE_SPIN_RAD_S;
         const cosA = Math.cos(a), sinA = Math.sin(a);
-        for (let py = -R; py <= R; py += step) {
-            for (let px = -R; px <= R; px += step) {
-                const nx = px / R, ny = -py / R;
-                const r2 = nx * nx + ny * ny;
-                if (r2 > 1) continue;
-                const nz = Math.sqrt(1 - r2);
-                const rx = nx * cosA - nz * sinA;
-                const rz = nx * sinA + nz * cosA;
-                const u = ((Math.atan2(rz, rx) / TAU + 0.5) % 1 + 1) % 1;
-                const v = Math.acos(clamp(ny, -1, 1)) / Math.PI;
-                const gx = Math.min(sim.tw - 1, (u * sim.tw) | 0);
-                const gy = Math.min(sim.th - 1, (v * sim.th) | 0);
-                const idx = gy * sim.tw + gx;
-                const morph = sim.gsV[idx];
-                const wave = Math.abs(sim.waveH[idx]);
-                const fres = Math.pow(1 - nz, 2.2);
-                const inten = morph * 1.35 + wave * 0.55 + fres * 0.5;
-                if (inten > 0.18) {
-                    const hue = (195 + morph * 120 + fres * 75 + sim.wSpotify * 45) % 360;
-                    ctx.fillStyle = `hsla(${hue}, 82%, ${Math.min(72, 26 + inten * 28)}%, ${Math.min(0.82, inten * 0.6)})`;
-                    ctx.fillRect(cx + px, cy + py, step + 0.5, step + 0.5);
-                }
+        const spotBoost = sim.wSpotify * 0.35;
+        const invTau = 1 / TAU;
+
+        for (let k = 0; k < lutCount; k++) {
+            const nx = lutNx[k], nz = lutNz[k];
+            const rx = nx * cosA - nz * sinA;
+            const rz = nx * sinA + nz * cosA;
+            const u = ((Math.atan2(rz, rx) * invTau + 0.5) % 1 + 1) % 1;
+            const gx = Math.min(tw - 1, (u * tw) | 0);
+            const idx = lutGy[k] * tw + gx;
+            const morph = gsV[idx];
+            const wave = waveH[idx];
+            const wAbs = wave < 0 ? -wave : wave;
+            const fres = lutFres[k];
+            const inten = morph * 1.35 + wAbs * 0.55 + fres * 0.9;
+            const p = lutPix[k];
+            if (inten <= 0.12) {
+                sData[p] = 6; sData[p + 1] = 10; sData[p + 2] = 22; sData[p + 3] = 248;
+            } else {
+                const phase = morph * 2.2 + fres * 1.4 + spotBoost;
+                const r = 10 + (0.5 + 0.5 * Math.cos(phase + 2.2)) * inten * 115;
+                const g = 14 + (0.5 + 0.5 * Math.cos(phase + 0.9)) * inten * 150;
+                const b = 28 + (0.5 + 0.5 * Math.cos(phase - 0.3)) * inten * 215;
+                sData[p] = r > 255 ? 255 : r | 0;
+                sData[p + 1] = g > 255 ? 255 : g | 0;
+                sData[p + 2] = b > 255 ? 255 : b | 0;
+                sData[p + 3] = 250;
             }
         }
-        ctx.restore();
-
-        ctx.strokeStyle = 'rgba(110, 200, 255, 0.45)';
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        ctx.arc(cx, cy, R, 0, TAU);
-        ctx.stroke();
+        this.sphereCtx.putImageData(this.sphereImg, 0, 0);
+        ctx.drawImage(this.sphereCanvas, cx - R, cy - R, R * 2, R * 2);
     }
 }

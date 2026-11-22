@@ -45,6 +45,7 @@ body {
     pointer-events: none;
     z-index: -1;
     background-color: var(--bg);
+    contain: strict;
 }
 
 /* The simulation field fades up once the first frame is on screen. */
@@ -76,6 +77,7 @@ body {
         rgba(4, 6, 11, 0) 88%);
     z-index: 0;
     pointer-events: none;
+    contain: layout style;
 }
 
 .container {

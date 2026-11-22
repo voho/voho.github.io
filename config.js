@@ -4,10 +4,11 @@
 
 export const config = {
     // --- Navier-Stokes Fluid Grid --------------------------------------------
-    FLUID_TARGET_CELLS: 5000,   // isotropic cell budget across aspect ratios
+    FLUID_TARGET_CELLS: 3800,   // isotropic cell budget across aspect ratios
     FLUID_MIN_AXIS: 42,
     FLUID_MAX_ASPECT: 2.2,
-    FLUID_PRESSURE_ITERS: 10,   // warm-started Gauss-Seidel passes
+    FLUID_PRESSURE_ITERS: 4,    // warm-started Red-Black SOR passes
+    FLUID_SOR_OMEGA: 1.48,      // successive over-relaxation factor
     FLUID_VORTICITY: 2.3,       // curl confinement strength
     FLUID_VEL_DAMP: 0.992,
     FLUID_DYE_DAMP: 0.986,
@@ -17,7 +18,7 @@ export const config = {
     FLUID_BURST_FORCE: 28,
 
     // --- Lagrangian Fluid Tracers --------------------------------------------
-    TRACER_COUNT: 4200,
+    TRACER_COUNT: 3200,
     TRACER_LIFE_MIN: 1.8,
     TRACER_LIFE_MAX: 4.2,
 
@@ -26,7 +27,7 @@ export const config = {
     TURING_H: 64,
     GS_DU: 0.16,
     GS_DV: 0.08,
-    GS_SUBSTEPS: 4,
+    GS_SUBSTEPS: 2,
     GS_WARMUP_INIT: 165,
     GS_WARMUP_IGNITE: 55,
     // Phase-diagram presets steered smoothly by button hover mood
@@ -67,11 +68,13 @@ export const config = {
 
     // --- Quality Governor (steps down once if FPS drops below target) --------
     MAX_DPR: 1.5,
-    QUALITY_SAMPLE_S: 2.0,
-    QUALITY_GRACE_S: 2.5,
-    QUALITY_MIN_FPS: 42,
+    CORE_MARCH_STEPS: 32,
+    QUALITY_SAMPLE_S: 1.5,
+    QUALITY_GRACE_S: 1.8,
+    QUALITY_MIN_FPS: 46,
     QUALITY_STEPS: [
-        { maxDpr: 1.15, marchSteps: 36, tracers: 2200, gsSubsteps: 3, pressureIters: 8 },
-        { maxDpr: 0.85, marchSteps: 28, tracers: 900, gsSubsteps: 2, pressureIters: 6 },
+        { maxDpr: 1.15, marchSteps: 26, tracers: 1800, gsSubsteps: 2, pressureIters: 4 },
+        { maxDpr: 0.88, marchSteps: 22, tracers: 900, gsSubsteps: 1, pressureIters: 3 },
+        { maxDpr: 0.72, marchSteps: 18, tracers: 400, gsSubsteps: 1, pressureIters: 3 },
     ],
 };

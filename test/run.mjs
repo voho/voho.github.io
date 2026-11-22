@@ -107,7 +107,7 @@ for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
     for (let i = 0; i < 180; i++) sim.update(1 / 60);
     const perFrame = Number(process.hrtime.bigint() - t0) / 1e6 / 180;
     console.log(`info coupled update cost: ${perFrame.toFixed(3)} ms/frame`);
-    check('coupled update cost under 4 ms/frame', perFrame < 4);
+    check('coupled update cost under 1.0 ms/frame', perFrame < 1.0);
 }
 
 // --- 6. GLSL shader syntax & delimiter checks -------------------------------

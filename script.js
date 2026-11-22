@@ -25,7 +25,7 @@ const view = {
 const quality = {
     step: 0,
     maxDpr: config.MAX_DPR,
-    marchSteps: 48,
+    marchSteps: config.CORE_MARCH_STEPS,
     tracers: config.TRACER_COUNT,
     gsSubsteps: config.GS_SUBSTEPS,
     pressureIters: config.FLUID_PRESSURE_ITERS,
