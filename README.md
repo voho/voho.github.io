@@ -4,60 +4,32 @@ Personal landing page served at [voho.eu](http://voho.eu) via GitHub Pages.
 
 Static site with no build step: `index.html` + `styles.css` + ES modules.
 
-## Background animation
+## Background simulation
 
-Two canvas layers render a network simulation:
+A coupled real-time physics and morphogenesis simulation renders behind a fixed, readable centre block:
 
-- `config.js` — every tunable in one place (colours, densities, speeds,
-  camera, interactions, load choreography, quality tiers). Start here to
-  adjust the look; the other files read from it and hold no literals of
-  their own.
-- `network.js` — graph construction and simulation state. Nodes sit on a
-  jittered grid triangulated with Bowyer–Watson Delaunay (planar by
-  construction, so edges never cross), thinned while keeping a spanning
-  tree. Node drift stays inside a per-layout clearance bound, so crossings
-  remain impossible while the mesh breathes. Spacing follows the viewport
-  area but is capped so narrow phones still get a fine mesh rather than a
-  few huge triangles.
-- `renderer.js` — draws both layers. The back layer is monochrome, carries
-  the aurora, and is rendered at reduced resolution and blurred with CSS
-  for depth of field; the front layer carries the rainbow signals, sparks,
-  rings and the pointer torch.
-- `script.js` — canvas sizing, the camera (pointer/touch/tilt parallax,
-  sway, slow continuous rotation), input, the load choreography, the
-  animation loop, the quality governor and reduced-motion handling.
-
-The camera moves the field only. The centre block — text, buttons and the
-shade behind them — never moves: it is the one still thing to read against
-everything else drifting.
-
-Signals route along BFS shortest paths and step through the palette at
-every node pass.
+- `config.js` — central tuning knobs (Navier-Stokes solver, Gray-Scott & wave PDEs, core coupling, tracers, camera, choreography, quality tiers).
+- `simulation.js` — pure DOM-free `CoupledSimulation` engine combining:
+  - an adaptive isotropic **Navier-Stokes (Stable Fluids)** grid (`∇·u = 0`, vorticity confinement, semi-Lagrangian advection) with solid-body deflection around the central core and thousands of advected **Lagrangian tracers**;
+  - a **96×64 Gray-Scott reaction-diffusion PDE** coupled to a **2D damped wave equation** whose morphogen concentrations and waves physically displace the 3D core surface;
+  - bidirectional coupling between the surrounding fluid rim and the core's surface waves.
+- `renderer.js` — `WebGL2Renderer` (single-pass 3D SDF raymarched obsidian core with live Navier-Stokes environment reflections, thin-film optical iridescence, fluid composite, and additive tracers) plus a `Canvas2DRenderer` graceful fallback driven by the same simulation state.
+- `script.js` — WebGL2 initialization, `webglcontextlost` fallback and recovery, `100lvh`-safe responsive sizing, pointer/touch/tilt parallax, button mood hooks, load ignition choreography, FPS quality governor, and `prefers-reduced-motion` handling.
 
 ## Interaction
 
-- **Load** — a wavefront expands from the centre and lights the whole mesh
-  in rainbow bands while the text fades and sharpens into place.
-- **Click or tap anywhere** to fire a burst from the nearest node.
-- **Move the cursor, or drag a finger**, to sweep a torch across the web:
-  nearby edges and nodes brighten. Touch uses touch events rather than
-  pointer events, because browsers fire `pointercancel` as soon as they
-  consider claiming a drag for a scroll.
-- **Tilt a phone** to steer the camera. The sensor is used only where the
-  browser hands it over; no permission is ever requested.
-- **Hover or focus a button** and flares stream out of the mesh behind it.
-  The button itself only changes colour — it stays put.
+- **Load** — the Turing core ignites outward with an expanding chromatic ring while radiating symmetric vortex jets into the surrounding fluid as the text sharpens into place.
+- **Move cursor or drag finger** — injects momentum and iridescent dye into the fluid; sweeping across the core perturbs surface waves.
+- **Click or tap** — clicking the central core triggers a standing wave + fresh chemical seed and blasts rim jets outward; clicking surrounding space injects a vortex dipole.
+- **Tilt a phone** — shifts camera parallax gently without requesting extra sensor permissions.
+- **Hover or focus a button** — shifts the Gray-Scott `(F, k)` phase regime and fluid palette mood (`LinkedIn` cyan-indigo vs `Spotify` emerald-violet) while buttons remain stationary.
 
-## Performance
+## Graceful degradation & accessibility
 
-The far layer renders every other frame behind its blur. Beyond that the
-scene watches its own frame rate and, after a grace period, degrades once
-in steps — thinner depth updates, then the foreground bokeh, the torch and
-the pixel ratio. It never upgrades again, so quality cannot oscillate. The
-loop stops entirely while the page is hidden.
-
-`prefers-reduced-motion` renders a single static frame instead: no loop,
-no ignition, no camera.
+1. **WebGL2 (Full)** — 48-step 3D SDF raymarch + 4,200 tracers + `1.5` max DPR.
+2. **Quality Governor** — steps down `maxDpr`, raymarch steps, tracer count, and PDE substeps if FPS drops below threshold.
+3. **Canvas 2D Fallback** — automatically activates when WebGL2 is unavailable or context is lost.
+4. **`prefers-reduced-motion`** — renders a single settled static frame with no animation loop.
 
 ## Tests
 
@@ -65,7 +37,4 @@ no ignition, no camera.
 npm test
 ```
 
-Headless Node checks: planarity (no crossing edges, also during a
-simulated soak), rotation-circle coverage, connectivity, mesh density on
-narrow viewports, the ignition wave, targeted flares, palette invariants
-and the per-frame update budget.
+Headless Node checks for adaptive fluid sizing, core-to-fluid & wave coupling, mood-driven Gray-Scott phase steering, 120-step soak stability (0 NaNs, low divergence, active morphogenesis), per-frame update budget, and WebGL2 `#version 300 es` shader integrity.

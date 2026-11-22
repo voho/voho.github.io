@@ -1,207 +1,77 @@
 // config.js
-// All tuning knobs for the background network simulation and the page
-// choreography around it.
+// Central tuning knobs for the coupled Navier-Stokes fluid solver, Gray-Scott
+// Turing morphogenesis core, wave PDE, interactions, and quality governor.
 
 export const config = {
-    // --- Layout ------------------------------------------------------------
-    // Node spacing is derived from the viewport area and clamped to this
-    // range, so density feels the same from phones up to large monitors.
-    SPACING_AREA_DIVISOR: 130,
-    SPACING_MIN: 88,
-    SPACING_MAX: 150,
-    // Area alone leaves narrow (phone) viewports with only ~4 cells across,
-    // which reads as a handful of huge triangles. Cap the spacing so the
-    // short axis always fits at least this many cells.
-    MIN_CELLS_SHORT_AXIS: 6,
-    JITTER: 0.36,              // node offset from its grid point (fraction of a cell)
-    EXTRA_EDGE_KEEP: 0.5,      // share of non-spanning-tree edges kept when thinning
-    LONG_EDGE_FACTOR: 1.9,     // drop non-tree edges longer than spacing * factor
+    // --- Navier-Stokes Fluid Grid --------------------------------------------
+    FLUID_TARGET_CELLS: 5000,   // isotropic cell budget across aspect ratios
+    FLUID_MIN_AXIS: 42,
+    FLUID_MAX_ASPECT: 2.2,
+    FLUID_PRESSURE_ITERS: 10,   // warm-started Gauss-Seidel passes
+    FLUID_VORTICITY: 2.3,       // curl confinement strength
+    FLUID_VEL_DAMP: 0.992,
+    FLUID_DYE_DAMP: 0.986,
+    FLUID_MAX_VEL: 48,
+    FLUID_AMBIENT_FORCE: 17,
+    FLUID_POINTER_FORCE: 460,
+    FLUID_BURST_FORCE: 28,
 
-    // --- Node drift (always kept below the computed no-crossing bound) ------
-    DRIFT_MAX_FRAC: 0.085,     // max drift radius as a fraction of node spacing
-    DRIFT_SAFETY: 0.45,        // fraction of the geometric safety margin actually used
-    DRIFT_FREQ_MIN: 0.05,      // Hz
-    DRIFT_FREQ_MAX: 0.12,
+    // --- Lagrangian Fluid Tracers --------------------------------------------
+    TRACER_COUNT: 4200,
+    TRACER_LIFE_MIN: 1.8,
+    TRACER_LIFE_MAX: 4.2,
 
-    // --- Colours -------------------------------------------------------------
-    BG_TOP: '#05070d',
-    BG_BOTTOM: '#0b1120',
-    BG_CENTER_GLOW: 'rgba(64, 105, 180, 0.07)',
-    VIGNETTE: 'rgba(0, 0, 0, 0.38)',
-    EDGE_RGB: [126, 160, 215],
-    EDGE_ALPHA: 0.17,
-    EDGE_WIDTH: 1,
-    NODE_ALPHA_MIN: 0.35,
-    NODE_ALPHA_MAX: 0.8,
-    NODE_RADIUS_MIN: 1.4,
-    NODE_RADIUS_MAX: 2.8,
-    // Nodes get pastel rainbow tints: a hue gradient sweeps across the
-    // screen (so neighbours harmonise) with per-node jitter on top.
-    NODE_HUE_SPAN: 360,        // degrees of hue across the diagonal
-    NODE_HUE_JITTER: 28,
-    NODE_HUE_SAT: 0.55,
-    NODE_HUE_LIGHT: 0.8,
-    HUB_DEGREE: 6,             // nodes with at least this many links get a faint halo
-    HUB_GLOW_ALPHA: 0.1,
-    HALO_COLOR: '#7fb4ff',
-    HUB_BREATH_AMP: 0.5,       // px of slow radius breathing on hubs
-    HUB_BREATH_FREQ: 0.18,     // Hz
+    // --- Turing Morphogenesis + Wave PDE Core --------------------------------
+    TURING_W: 96,
+    TURING_H: 64,
+    GS_DU: 0.16,
+    GS_DV: 0.08,
+    GS_SUBSTEPS: 4,
+    GS_WARMUP_INIT: 165,
+    GS_WARMUP_IGNITE: 55,
+    // Phase-diagram presets steered smoothly by button hover mood
+    GS_F_BASE: 0.037,
+    GS_K_BASE: 0.060,
+    GS_F_LINKEDIN: 0.045,
+    GS_K_LINKEDIN: 0.062,
+    GS_F_SPOTIFY: 0.027,
+    GS_K_SPOTIFY: 0.056,
+    WAVE_C2: 0.18,              // strictly CFL-stable (<= 0.5)
+    WAVE_DAMP: 0.974,
+    WAVE_CLAMP: 1.5,
 
-    // --- Twinkle ---------------------------------------------------------------
-    TWINKLE_FREQ_MIN: 0.1,     // Hz
-    TWINKLE_FREQ_MAX: 0.25,
-    TWINKLE_DEPTH: 0.5,        // how much of a node's brightness oscillates
+    // --- 3D Core Projection & Solid-Body Coupling ----------------------------
+    CORE_SPIN_RAD_S: 0.15,
+    CORE_CAM_Z: 4.35,
+    CORE_CAM_FOV: 1.35,
+    CORE_WORLD_RADIUS: 0.88,
+    CORE_FLUID_RADIUS_FRAC: 0.285,
+    CORE_NARROW_ASPECT: 0.8,
+    CORE_NARROW_SCALE: 1.18,
 
-    // --- Edge shimmer (slow brightness wave travelling across the mesh) ---------
-    SHIMMER_DEPTH: 0.35,       // +- fraction of the base edge alpha
-    SHIMMER_WAVELENGTH: 700,   // px
-    SHIMMER_SPEED: 60,         // px/s of wave travel
-    SHIMMER_BUCKETS: 5,        // alpha quantisation steps (keeps strokes batched)
-
-    // --- Signals (packets routed along shortest paths) ---------------------------
-    SIGNAL_MAX: 8,
-    SIGNAL_SPAWN_MIN_S: 0.45,
-    SIGNAL_SPAWN_MAX_S: 1.1,
-    SIGNAL_SPEED_MIN: 120,     // px / s
-    SIGNAL_SPEED_MAX: 190,
-    SIGNAL_HOPS_MIN: 4,
-    SIGNAL_HOPS_MAX: 9,
-    // Full rainbow, in hue order: each signal cycles one step per node pass.
-    SIGNAL_COLORS: ['#ff5d6c', '#ff9f43', '#ffd93d', '#6dd95f', '#34e5c2',
-        '#59d7ff', '#6fa8ff', '#a78bff', '#ff7ad9'],
-    SIGNAL_LAUNCH_DELAY_S: 0.22, // charge-up pause at the source before launching
-    SIGNAL_EASE: 0.6,          // 0 = linear hops, 1 = full ease-in-out per hop
-    SIGNAL_HARD_CAP: 14,       // absolute limit including cascades and click bursts
-    CASCADE_CHANCE: 0.35,      // chance an arrival relays a follow-up signal
-    CASCADE_MAX_GEN: 2,
-    EDGE_LIT_DECAY_S: 0.55,    // time constant of the fading trail
-    NODE_LIT_DECAY_S: 0.4,
-
-    // --- Arrival effects ----------------------------------------------------------
-    RING_DURATION_S: 0.9,
-    RING_RADIUS_FROM: 5,
-    RING_RADIUS_TO: 30,
-    RING_ALPHA: 0.5,
-    RING_ECHO_DELAY_S: 0.12,   // second, fainter ring shortly after the first
-    RING_ECHO_ALPHA_SCALE: 0.5,
-    SPARK_COUNT: 6,
-    SPARK_SPEED: 90,           // initial px/s
-    SPARK_DECEL: 3.5,          // 1/s velocity decay
-    SPARK_DURATION_S: 0.55,
-
-    // --- Dust (tiny far particles, neutral grey) -------------------------------------
-    DUST_AREA_PER_PARTICLE: 26000,
-    DUST_COLOR: [185, 192, 204],
-    DUST_SPEED_MIN: 2,         // px / s, slow upward drift
-    DUST_SPEED_MAX: 7,
-
-    // --- Bokeh (large soft out-of-focus discs, pastel rainbow) -----------------------
-    BOKEH_AREA_PER: 100000,
-    BOKEH_COLORS: ['#ff8fa3', '#ffc46b', '#ffe66b', '#7fe08a', '#5fe3c4',
-        '#66c9ff', '#8aa8ff', '#c39bff', '#ff9ae0'],
-    BOKEH_R_MIN: 9,
-    BOKEH_R_MAX: 26,
-    BOKEH_ALPHA_MIN: 0.04,
-    BOKEH_ALPHA_MAX: 0.1,
-    BOKEH_DRIFT: 2,            // max wander speed, px/s
-    FG_BOKEH_COUNT: 8,         // big foreground discs on the main canvas
-    FG_BOKEH_R_MIN: 16,
-    FG_BOKEH_R_MAX: 36,
-    FG_BOKEH_ALPHA_MIN: 0.04,
-    FG_BOKEH_ALPHA_MAX: 0.08,
-
-    // --- Stars: very subtle particles flying slowly towards the viewer ----------------
-    STAR_AREA_PER: 160000,     // one star per this many px^2 (capped in code)
-    STAR_MAX: 24,
-    STAR_SPEED_MIN: 0.012,     // depth units per second (a crossing takes ~40 s)
-    STAR_SPEED_MAX: 0.03,
-    STAR_R_MIN: 0.5,
-    STAR_R_MAX: 1.1,
-    STAR_ALPHA_MIN: 0.08,
-    STAR_ALPHA_MAX: 0.2,
-    STAR_COLORS: ['#cfe4ff', '#eaf6ff', '#ffd9e8', '#d9ffe3', '#fff3c4'],
-
-    // --- Depth layer (blurred canvas behind the main one; monochrome & faint) --------
-    DEPTH_SPACING_SCALE: 0.55, // denser, smaller cells: reads as further away
-    DEPTH_RES_SCALE: 0.66,     // internal resolution of the depth canvas
-    DEPTH_EDGE_RGB: [205, 210, 220],
-    DEPTH_EDGE_ALPHA: 0.09,
-    DEPTH_NODE_SCALE: 0.8,
-    DEPTH_NODE_ALPHA: 0.5,
-    DEPTH_SIGNAL_COLORS: ['#eef1f6', '#c9cfd9', '#ffffff'], // greys only
-    DEPTH_BOKEH_COLORS: ['#e8ecf2', '#ffffff', '#c5cad2'],
-    DEPTH_BOKEH_ALPHA_SCALE: 0.7,
-    DEPTH_HALO_COLOR: '#dfe5ee',
-    DEPTH_LIT_SCALE: 0.55,     // trail brightness multiplier for the back layer
-    DEPTH_SIGNAL_MAX: 4,
-    DEPTH_SPAWN_MIN_S: 1.4,
-    DEPTH_SPAWN_MAX_S: 3,
-    DEPTH_SPEED_SCALE: 0.55,
-    DEPTH_RING_SCALE: 0.6,
-
-    // --- Ignition: a shockwave that lights the whole mesh once, on load ---------------
-    IGNITE_SPEED: 1350,        // px/s the wavefront travels outwards
-    IGNITE_RING_PX: 150,       // the wave steps one palette colour every this many px
-    IGNITE_DELAY_S: 0.12,      // beat of darkness before the world switches on
-    IGNITE_DEPTH_DELAY_S: 0.3, // the far layer catches fire a little later
-
-    // --- Aurora: huge, very faint colour blooms drifting in the far layer -------------
-    // Barely visible on their own; together they stop the background from
-    // reading as flat black and give the mesh something to float in.
-    AURORA: [
-        { color: '#3d6bff', r: 0.95, alpha: 0.1, ox: 0.24, oy: 0.16, freq: 0.011, phase: 0 },
-        { color: '#b268ff', r: 0.8, alpha: 0.07, ox: 0.3, oy: 0.2, freq: 0.008, phase: 2.4 },
-        { color: '#2fd3c0', r: 0.7, alpha: 0.05, ox: 0.26, oy: 0.24, freq: 0.013, phase: 4.1 },
+    // --- Palette (shared by fluid plumes, tracers and bursts) ----------------
+    PALETTE: [
+        '#ff5d6c', '#ff9f43', '#ffd93d', '#6dd95f', '#34e5c2',
+        '#59d7ff', '#6fa8ff', '#a78bff', '#ff7ad9',
     ],
 
-    // --- Camera: pointer parallax + sway + continuous slow rotation -------------------
-    // The camera moves the field only. The centre block — text, buttons and
-    // the shade behind them — is deliberately fixed: it is the one still
-    // thing to read against everything else drifting, and anything that
-    // nudges it can resize the document and jolt the whole page.
-    PARALLAX_PX: 8,            // px of shift when the cursor reaches a screen edge
-    PARALLAX_EASE: 3,          // lerp speed, 1/s
-    SWAY_AMP: 5,               // px of slow always-on camera sway
-    SWAY_FREQ: 0.022,          // Hz
-    ROT_SPEED_DEG_S: 0.75,     // continuous rotation; one revolution in ~8 minutes
-    OFFSET_DUST: 0.25,         // per-layer multipliers of the camera offset
-    OFFSET_DEPTH: 0.4,
-    OFFSET_MAIN: 1,
-    OFFSET_FG: 1.6,
-    ROT_MAIN: 1,               // per-layer multipliers of the camera rotation
-    ROT_DEPTH: -0.6,           // counter-rotation enhances the depth illusion
+    // --- Camera / Input / Page Choreography ----------------------------------
+    PARALLAX_EASE: 4.5,
+    TILT_RANGE_DEG: 22,
+    TILT_RECENTER: 0.004,
+    FONT_WAIT_MS: 900,
+    HINT_TIMEOUT_MS: 9000,
+    RESIZE_DEBOUNCE_MS: 180,
+    ORIENTATION_DEBOUNCE_MS: 250,
+    BUTTON_PULSE_COOLDOWN_MS: 900,
 
-    // --- Pointer --------------------------------------------------------------------
-    HOVER_RADIUS: 150,
-    HOVER_NODE_BOOST: 0.6,     // extra brightness / radius for nodes near the cursor
-    CLICK_RADIUS: 240,         // a click fires a burst from the nearest node within this
-    CLICK_BURST: 3,            // signals emitted per click
-    // Torch: the cursor (or a dragging finger) lights the edges around it, so
-    // moving across the page feels like sweeping a lamp over a spider web.
-    TORCH_RADIUS: 200,
-    TORCH_ALPHA: 0.6,
-    TORCH_RGB: [158, 196, 255],
-    // Phone tilt drives the same parallax the mouse does on the desktop.
-    TILT_RANGE_DEG: 22,        // tilt that reaches full parallax
-    TILT_RECENTER: 0.004,      // per-event drift of the neutral pose, so it never pins
-
-    // --- Page choreography ------------------------------------------------------------
-    FONT_WAIT_MS: 900,         // how long the reveal waits for the webfont
-    BUTTON_FLARE_COUNT: 4,     // signals sent out of the mesh behind a hovered button
-    BUTTON_FLARE_COOLDOWN_MS: 3000,
-    HINT_TIMEOUT_MS: 9000,     // the interaction hint leaves on its own after this
-    RESIZE_REBUILD_MS: 180,    // debounce before rebuilding the mesh at a new size
-    ORIENTATION_REBUILD_MS: 250,
-
-    // --- Quality ------------------------------------------------------------------------
-    MAX_DPR: 2,                // cap on the device pixel ratio the canvases render at
-    // The scene degrades once, in steps, if a device cannot hold the frame
-    // rate. It never upgrades again, so quality cannot oscillate.
-    QUALITY_SAMPLE_S: 2,       // length of an fps sample window
-    QUALITY_GRACE_S: 2.5,      // ignore the first seconds (load, ignition, fonts)
+    // --- Quality Governor (steps down once if FPS drops below target) --------
+    MAX_DPR: 1.5,
+    QUALITY_SAMPLE_S: 2.0,
+    QUALITY_GRACE_S: 2.5,
     QUALITY_MIN_FPS: 42,
     QUALITY_STEPS: [
-        { depthEvery: 3, fgBokeh: false },
-        { depthEvery: 4, fgBokeh: false, maxDpr: 1.25, torch: false },
+        { maxDpr: 1.15, marchSteps: 36, tracers: 2200, gsSubsteps: 3, pressureIters: 8 },
+        { maxDpr: 0.85, marchSteps: 28, tracers: 900, gsSubsteps: 2, pressureIters: 6 },
     ],
 };

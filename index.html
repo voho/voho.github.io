@@ -11,13 +11,13 @@
       gtag('js', new Date());
       gtag('config', 'G-XTS3DJW99V');
     </script>
-    <meta name="description" content="Vojta Hordějčuk — find me on LinkedIn or listen on Spotify.">
+    <meta name="description" content="Vojta Hordějčuk — father of software. Founder at Protocodus and Co-Founder of Evangelist. Meet me on LinkedIn or listen on Spotify.">
     <meta name="theme-color" content="#05070d">
     <meta name="color-scheme" content="dark">
     <title>Vojta Hordějčuk</title>
     <meta property="og:type" content="website">
     <meta property="og:title" content="Vojta Hordějčuk">
-    <meta property="og:description" content="father of software — find me on LinkedIn or listen on Spotify.">
+    <meta property="og:description" content="father of software — Founder at Protocodus and Co-Founder of Evangelist. Meet me on LinkedIn or listen on Spotify.">
     <meta property="og:url" content="https://voho.eu/">
     <meta name="twitter:card" content="summary">
     <link rel="canonical" href="https://voho.eu/">
@@ -26,6 +26,25 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;700&display=swap">
     <link rel="stylesheet" href="styles.css">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Person",
+      "name": "Vojta Hordějčuk",
+      "description": "father of software",
+      "url": "https://voho.eu/",
+      "sameAs": [
+        "https://www.linkedin.com/in/vohocz/",
+        "https://open.spotify.com/artist/4OaWtKAgl8oGU9QTa4wXu4",
+        "https://protocodus.cz/",
+        "https://evangelist.so/"
+      ],
+      "worksFor": [
+        { "@type": "Organization", "name": "Protocodus", "url": "https://protocodus.cz/" },
+        { "@type": "Organization", "name": "Evangelist", "url": "https://evangelist.so/" }
+      ]
+    }
+    </script>
     <script>
       // Marks the document as scripted, so the reveal animation only hides
       // content that something is going to bring back. The timer is a safety
@@ -37,20 +56,20 @@
     </script>
 </head>
 <body>
-    <canvas id="background-canvas-depth" aria-hidden="true"></canvas>
-    <canvas id="background-canvas" aria-hidden="true"></canvas>
+    <canvas id="bg-gl" aria-hidden="true"></canvas>
+    <canvas id="bg-2d" aria-hidden="true" hidden></canvas>
     <div id="content-backdrop" aria-hidden="true"></div>
     <main class="container">
         <h1 class="reveal" style="--i: 0">Vojta Hordějčuk</h1>
         <p class="subtitle reveal" style="--i: 1">father of software</p>
         <p class="claims reveal" style="--i: 2">
-            <a href="https://protocodus.cz/">Founder at Protocodus</a>
+            <a href="https://protocodus.cz/" rel="noopener noreferrer">Founder at Protocodus</a>
             <span class="claims-sep" aria-hidden="true">·</span>
-            <a href="https://evangelist.so/">Co-Founder of Evangelist</a>
+            <a href="https://evangelist.so/" rel="noopener noreferrer">Co-Founder of Evangelist</a>
         </p>
         <div class="buttons reveal" style="--i: 3">
-            <a href="https://www.linkedin.com/in/vohocz/" class="button">Meet me on LinkedIn</a>
-            <a href="https://open.spotify.com/artist/4OaWtKAgl8oGU9QTa4wXu4" class="button">Listen on Spotify</a>
+            <a href="https://www.linkedin.com/in/vohocz/" class="button" data-mood="1" rel="noopener noreferrer">Meet me on LinkedIn</a>
+            <a href="https://open.spotify.com/artist/4OaWtKAgl8oGU9QTa4wXu4" class="button" data-mood="2" rel="noopener noreferrer">Listen on Spotify</a>
         </div>
     </main>
     <p class="hint" aria-hidden="true"><span class="hint-inner"><span

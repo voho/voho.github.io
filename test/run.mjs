@@ -1,92 +1,10 @@
 // test/run.mjs
-// Headless checks for the background simulation. Run with: npm test
-//
-// Guards the core invariants: no crossing edges on either layer (also under
-// drift, clicks and flares), full coverage of the rotation circle, graph
-// connectivity, the monochrome depth palette, the rainbow main palette and
-// the hard signal cap.
+// Headless checks for the coupled Navier-Stokes + Turing Core simulation
+// and WebGL2 shaders. Run with: npm test
 
-import { Simulation } from '../network.js';
+import { CoupledSimulation } from '../simulation.js';
+import { SHADERS } from '../renderer.js';
 import { config } from '../config.js';
-
-function orient(ax, ay, bx, by, cx, cy) {
-    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-}
-
-function properCross(a, b, c, d) {
-    const d1 = orient(c.x, c.y, d.x, d.y, a.x, a.y);
-    const d2 = orient(c.x, c.y, d.x, d.y, b.x, b.y);
-    const d3 = orient(a.x, a.y, b.x, b.y, c.x, c.y);
-    const d4 = orient(a.x, a.y, b.x, b.y, d.x, d.y);
-    return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
-}
-
-function countCrossings(net) {
-    let count = 0;
-    const E = net.edges, N = net.nodes;
-    for (let i = 0; i < E.length; i++) {
-        const e = E[i];
-        for (let j = i + 1; j < E.length; j++) {
-            const f = E[j];
-            if (e.a === f.a || e.a === f.b || e.b === f.a || e.b === f.b) continue;
-            if (properCross(N[e.a], N[e.b], N[f.a], N[f.b])) count++;
-        }
-    }
-    return count;
-}
-
-function connected(net) {
-    const seen = new Set([0]);
-    const queue = [0];
-    while (queue.length) {
-        const u = queue.pop();
-        for (const { n } of net.adj[u]) {
-            if (!seen.has(n)) { seen.add(n); queue.push(n); }
-        }
-    }
-    return seen.size === net.nodes.length;
-}
-
-// Rotating layers must cover the viewport's circumcircle (sampled boundary).
-function coversCircle(net, w, h) {
-    const slack = config.PARALLAX_PX + config.SWAY_AMP + 30;
-    const R = Math.hypot(w, h) / 2 + slack - 2;
-    const cellDiag = Math.hypot(
-        w / Math.round(w / net.spacing), h / Math.round(h / net.spacing));
-    for (let k = 0; k < 72; k++) {
-        const ang = k / 72 * 2 * Math.PI;
-        const px = w / 2 + Math.cos(ang) * R, py = h / 2 + Math.sin(ang) * R;
-        let ok = false;
-        for (const n of net.nodes) {
-            const dx = n.hx - px, dy = n.hy - py;
-            if (dx * dx + dy * dy < cellDiag * cellDiag * 2.25) { ok = true; break; }
-        }
-        if (!ok) return false;
-    }
-    return true;
-}
-
-function isGrey(colorStr) {
-    const m = colorStr.match(/rgb\((\d+), (\d+), (\d+)\)/);
-    const [r, g, b] = [Number(m[1]), Number(m[2]), Number(m[3])];
-    return Math.max(r, g, b) - Math.min(r, g, b) <= 14;
-}
-
-const mainOpts = { rotFactor: config.ROT_MAIN, fgBokeh: true, stars: true };
-const depthOpts = {
-    spacingScale: config.DEPTH_SPACING_SCALE,
-    rotFactor: config.ROT_DEPTH,
-    signalMax: config.DEPTH_SIGNAL_MAX,
-    spawnMin: config.DEPTH_SPAWN_MIN_S,
-    spawnMax: config.DEPTH_SPAWN_MAX_S,
-    speedScale: config.DEPTH_SPEED_SCALE,
-    mono: true,
-    palette: config.DEPTH_SIGNAL_COLORS,
-    bokehColors: config.DEPTH_BOKEH_COLORS,
-    bokehAlphaScale: config.DEPTH_BOKEH_ALPHA_SCALE,
-    dust: true,
-    bokeh: true,
-};
 
 let failed = false;
 const check = (label, ok) => {
@@ -94,116 +12,121 @@ const check = (label, ok) => {
     if (!ok) failed = true;
 };
 
-// --- Static layout checks across viewport sizes -------------------------------
+function allFinite(arr) {
+    for (let i = 0; i < arr.length; i++) {
+        if (!Number.isFinite(arr[i])) return false;
+    }
+    return true;
+}
+
+// --- 1. Adaptive fluid grid & core framing across viewport sizes ------------
 for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
-    for (const [name, opts] of [['main', mainOpts], ['depth', depthOpts]]) {
-        const t0 = process.hrtime.bigint();
-        const sim = new Simulation(w, h, opts);
-        const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-        const net = sim.net;
-        const label = `${w}x${h} ${name} (${net.nodes.length} nodes, `
-            + `${net.edges.length} edges, ${ms.toFixed(0)} ms)`;
-        check(`${label}: planar`, countCrossings(net) === 0);
-        check(`${label}: connected`, connected(net));
-        check(`${label}: covers rotation circle`, coversCircle(net, w, h));
-        // Narrow viewports must not degenerate into a few huge cells.
-        const cellCap = Math.min(w, h) / config.MIN_CELLS_SHORT_AXIS
-            * (opts.spacingScale || 1);
-        check(`${label}: short axis has enough cells`, net.spacing <= cellCap + 1e-9);
-    }
+    const sim = new CoupledSimulation(w, h);
+    const label = `${w}x${h} (fluid ${sim.gw}x${sim.gh}, coreR=${sim.coreScreenRadiusFrac.toFixed(3)})`;
+    check(`${label}: fluid axes >= min`,
+        sim.gw >= config.FLUID_MIN_AXIS && sim.gh >= config.FLUID_MIN_AXIS);
+    check(`${label}: core fits safely within short axis`,
+        sim.coreScreenRadiusFrac > 0.2 && sim.coreScreenRadiusFrac < 0.42);
+    check(`${label}: initial Turing morphogenesis active`,
+        Math.max(...sim.gsV) > 0.2 && Math.min(...sim.gsV) < 0.05);
 }
 
-// --- Palette checks -------------------------------------------------------------
-const sim = new Simulation(1440, 900, mainOpts);
-const simD = new Simulation(1440, 900, depthOpts);
-check('depth nodes are grey', simD.net.nodes.every(n => isGrey(n.colorStr)));
-check('main nodes are colourful',
-    sim.net.nodes.filter(n => !isGrey(n.colorStr)).length > sim.net.nodes.length * 0.6);
-check('depth bokeh uses the grey palette',
-    simD.bokeh.every(b => config.DEPTH_BOKEH_COLORS.includes(b.color)));
-
-// --- Ignition: the one-off wavefront that lights the mesh on load ----------------
+// --- 2. Interactive core-to-fluid & wave coupling ---------------------------
 {
-    const ign = new Simulation(1440, 900, mainOpts);
-    // Let ordinary traffic get going first: the reveal can be delayed by a
-    // slow webfont, and the wave has to start from a blank mesh regardless.
-    for (let i = 0; i < 60; i++) ign.update(1 / 60);
-    ign.burstAt(700, 450);
-    const busy = ign.signals.length > 0
-        || ign.net.edges.some(e => e.lit > 0) || ign.sparks.length > 0;
-    ign.ignite(config.IGNITE_DELAY_S);
-    check('ignition blanks whatever was already running',
-        busy && ign.signals.length === 0 && ign.sparks.length === 0
-        && ign.rings.length === 0
-        && ign.net.edges.every(e => e.lit === 0 && e.color === null)
-        && ign.net.nodes.every(n => n.lit === 0));
+    const sim = new CoupledSimulation(1440, 900);
+    sim.u.fill(0);
+    sim.v.fill(0);
+    sim.waveH.fill(0);
+    const kindCore = sim.interactAt(0.5, 0.5, 0);
+    let maxWave = 0;
+    let fluidEnergy = 0;
+    for (let i = 0; i < sim.waveH.length; i++) maxWave = Math.max(maxWave, Math.abs(sim.waveH[i]));
+    for (let i = 0; i < sim.u.length; i++) fluidEnergy += Math.hypot(sim.u[i], sim.v[i]);
+    check('core click returns "core", excites wave PDE & emits rim jets',
+        kindCore === 'core' && maxWave > 0.5 && fluidEnergy > 50);
+
+    sim.u.fill(0);
+    sim.v.fill(0);
+    const kindFluid = sim.interactAt(0.08, 0.5, 0);
+    let outerEnergy = 0;
+    for (let i = 0; i < sim.u.length; i++) outerEnergy += Math.hypot(sim.u[i], sim.v[i]);
+    check('outer click returns "fluid" & injects vortex dipole',
+        kindFluid === 'fluid' && outerEnergy > 40);
+}
+
+// --- 3. Phase-diagram mood steering -----------------------------------------
+{
+    const sim = new CoupledSimulation(1440, 900);
+    sim.targetMood = 1; // LinkedIn
+    for (let i = 0; i < 60; i++) sim.update(0.016);
+    const fLinkedIn = sim.gsF;
+
+    sim.targetMood = 2; // Spotify
+    for (let i = 0; i < 60; i++) sim.update(0.016);
+    const fSpotify = sim.gsF;
+
+    check(`Gray-Scott F shifts with mood (LinkedIn=${fLinkedIn.toFixed(4)} > Spotify=${fSpotify.toFixed(4)})`,
+        fLinkedIn > fSpotify + 0.008);
+}
+
+// --- 4. 120-step coupled soak test & incompressibility ----------------------
+{
+    const sim = new CoupledSimulation(1440, 900);
+    for (let step = 0; step < 120; step++) {
+        const t = step * 0.016;
+        const nx = 0.5 + Math.cos(t * 2) * 0.3;
+        const ny = 0.5 + Math.sin(t * 2) * 0.3;
+        sim.pointerMove(nx, ny, -0.02 * Math.sin(t * 2), 0.02 * Math.cos(t * 2));
+        if (step % 30 === 10) sim.interactAt(0.5, 0.5, 1);
+        if (step % 30 === 25) sim.interactAt(0.15, 0.75, 2);
+        sim.targetMood = step < 40 ? 0 : step < 80 ? 1 : 2;
+        sim.update(0.016);
+    }
+
+    const arraysOk = allFinite(sim.u) && allFinite(sim.v) && allFinite(sim.div) && allFinite(sim.p)
+        && allFinite(sim.dr) && allFinite(sim.dg) && allFinite(sim.db)
+        && allFinite(sim.gsU) && allFinite(sim.gsV) && allFinite(sim.waveH)
+        && allFinite(sim.tracerBuf);
+    check('120-step soak leaves all simulation fields finite (0 NaNs)', arraysOk);
+
+    const meanDiv = sim.computeMeanDivergence();
+    check(`free-fluid divergence remains small (mean |div|=${meanDiv.toFixed(4)} < 0.35)`,
+        meanDiv < 0.35);
+
+    const maxV = Math.max(...sim.gsV);
+    const minV = Math.min(...sim.gsV);
+    check(`Turing morphogenesis structure preserved (gsV in [${minV.toFixed(3)}, ${maxV.toFixed(3)}])`,
+        maxV > 0.2 && minV < 0.05);
+}
+
+// --- 5. Per-frame CPU update cost -------------------------------------------
+{
+    const sim = new CoupledSimulation(1440, 900);
+    for (let i = 0; i < 20; i++) sim.update(1 / 60); // JIT warmup
     const t0 = process.hrtime.bigint();
-    let steps = 0;
-    while (ign.wave && steps < 20 * 60) {
-        ign.update(1 / 60);
-        steps++;
+    for (let i = 0; i < 180; i++) sim.update(1 / 60);
+    const perFrame = Number(process.hrtime.bigint() - t0) / 1e6 / 180;
+    console.log(`info coupled update cost: ${perFrame.toFixed(3)} ms/frame`);
+    check('coupled update cost under 4 ms/frame', perFrame < 4);
+}
+
+// --- 6. GLSL shader syntax & delimiter checks -------------------------------
+for (const [name, src] of Object.entries(SHADERS)) {
+    const trimmed = src.trimStart();
+    const hasVer = trimmed.startsWith('#version 300 es');
+    let braces = 0;
+    let parens = 0;
+    let balanced = true;
+    for (const ch of trimmed) {
+        if (ch === '{') braces++;
+        else if (ch === '}') braces--;
+        else if (ch === '(') parens++;
+        else if (ch === ')') parens--;
+        if (braces < 0 || parens < 0) balanced = false;
     }
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6 / Math.max(1, steps);
-    check(`ignition finishes promptly (${steps} frames, ${ms.toFixed(3)} ms/frame)`,
-        ign.wave === null && steps > 1 && steps < 150);
-    check('ignition reaches every node', ign.net.nodes.every(n => n.waveLit));
-    check('ignition lights every edge', ign.net.edges.every(e => e.color !== null));
-    check('ignition paints the rainbow',
-        new Set(ign.net.edges.map(e => e.color)).size >= 6);
-    check('ignition leaves the mesh planar', countCrossings(ign.net) === 0);
-    check('ignition costs no more than a normal frame', ms < 1);
-    check('ordinary traffic waits for the wave to finish',
-        ign.signals.length === 0 && ign.spawnIn > 0);
-
-    const mono = new Simulation(1440, 900, depthOpts);
-    mono.ignite(0);
-    while (mono.wave) mono.update(1 / 60);
-    check('ignition stays monochrome on the depth layer',
-        mono.net.edges.every(e => config.DEPTH_SIGNAL_COLORS.includes(e.color)));
+    check(`shader ${name}: valid #version 300 es & balanced delimiters`,
+        hasVer && balanced && braces === 0 && parens === 0);
 }
-
-// --- Flares fired from a point ----------------------------------------------------
-{
-    const flare = new Simulation(1440, 900, mainOpts);
-    flare.fireFlares(3, 700, 450);
-    const sources = new Set(flare.signals.map(s => s.path[0]));
-    const src = flare.net.nodes[[...sources][0]];
-    check('point flares all start at one node near the target',
-        flare.signals.length > 0 && sources.size === 1
-        && Math.hypot(src.x - 700, src.y - 450) <= config.CLICK_RADIUS);
-}
-
-// --- Soak: 60 simulated seconds with clicks and button flares --------------------
-let crossings = 0, maxSignals = 0;
-const mainTrail = new Set(), depthTrail = new Set();
-for (let step = 0; step < 60 * 20; step++) {
-    sim.update(0.05);
-    simD.update(0.05);
-    if (step % 60 === 30) sim.burstAt(Math.random() * 1440, Math.random() * 900);
-    if (step % 65 === 40) sim.fireFlares(5);
-    maxSignals = Math.max(maxSignals, sim.signals.length);
-    for (const e of sim.net.edges) if (e.color) mainTrail.add(e.color);
-    for (const e of simD.net.edges) if (e.color) depthTrail.add(e.color);
-    if (step % 20 === 19) crossings += countCrossings(sim.net) + countCrossings(simD.net);
-}
-check('no crossings during the soak', crossings === 0);
-check(`signal hard cap respected (max seen ${maxSignals})`,
-    maxSignals > 0 && maxSignals <= config.SIGNAL_HARD_CAP);
-check(`main trails span the rainbow (${mainTrail.size} colours)`, mainTrail.size >= 6);
-check('depth trails stay monochrome',
-    depthTrail.size > 0 && [...depthTrail].every(c => config.DEPTH_SIGNAL_COLORS.includes(c)));
-check('stars stay in a valid state',
-    sim.stars.length > 0 && sim.stars.every(s => s.z > 0.05 && s.z <= 1.05 && s.fade >= 0));
-
-// --- Per-frame update cost --------------------------------------------------------
-const t0 = process.hrtime.bigint();
-for (let i = 0; i < 600; i++) {
-    sim.update(1 / 60);
-    simD.update(1 / 60);
-}
-const perFrame = Number(process.hrtime.bigint() - t0) / 1e6 / 600;
-console.log(`info update cost, both layers: ${perFrame.toFixed(3)} ms/frame`);
-check('update cost under 1 ms/frame', perFrame < 1);
 
 console.log(failed ? '\nFAILED' : '\nALL OK');
 process.exit(failed ? 1 : 0);

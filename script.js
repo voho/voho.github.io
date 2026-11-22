@@ -1,131 +1,116 @@
 // script.js
-// Bootstraps the background simulation: two canvases (blurred depth layer
-// behind a sharp main layer), camera sway/rotation, pointer/touch/tilt input,
-// the load choreography, the animation loop, an fps-driven quality governor
-// and reduced-motion handling.
+// Bootstraps the coupled Navier-Stokes + Turing Core simulation: WebGL2
+// primary renderer with automatic Canvas 2D fallback, pointer/touch/tilt
+// input, button mood hooks, load choreography, FPS quality governor, and
+// reduced-motion handling.
 
 import { config } from './config.js';
-import { Simulation } from './network.js';
-import { renderDepth, renderMain, screenToLayer } from './renderer.js';
+import { CoupledSimulation } from './simulation.js';
+import { WebGL2Renderer, Canvas2DRenderer } from './renderer.js';
 
 const root = document.documentElement;
-const mainCanvas = document.getElementById('background-canvas');
-const depthCanvas = document.getElementById('background-canvas-depth');
-const mainCtx = mainCanvas.getContext('2d');
-const depthCtx = depthCanvas.getContext('2d');
+const glCanvas = document.getElementById('bg-gl');
+const c2dCanvas = document.getElementById('bg-2d');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 const view = {
-    w: 0,
-    h: 0,
+    w: 1,
+    h: 1,
     dpr: 1,
-    pointer: { x: 0, y: 0, strength: 0, targetStrength: 0 },
+    pointer: { x: 0.5, y: 0.5, strength: 0, targetStrength: 0 },
     parallax: { x: 0, y: 0, tx: 0, ty: 0 },
-    offset: { x: 0, y: 0 },  // combined parallax + sway, in px
-    rot: 0,                  // camera rotation, radians
 };
 
-// Lowered once, in steps, if the device cannot hold the frame rate.
+// Quality degrades once, in steps, if the device cannot hold frame rate.
 const quality = {
     step: 0,
     maxDpr: config.MAX_DPR,
-    depthEvery: 2,
-    torch: true,
-    fgBokeh: true,
+    marchSteps: 48,
+    tracers: config.TRACER_COUNT,
+    gsSubsteps: config.GS_SUBSTEPS,
+    pressureIters: config.FLUID_PRESSURE_ITERS,
 };
 
-// Re-applied after every rebuild, which would otherwise restock the
-// particles a degraded device has already given up on.
-function applyQuality() {
-    if (!quality.fgBokeh && simMain) simMain.fgBokeh.length = 0;
-}
-
-let simMain = null;
-let simDepth = null;
+let sim = null;
+let glRenderer = null;
+let c2dRenderer = null;
+let useWebGL = false;
 let rafId = null;
 let rebuildTimer = 0;
 let elapsed = 0;
 
+function setBackend(webglActive) {
+    useWebGL = webglActive;
+    glCanvas.hidden = !webglActive;
+    c2dCanvas.hidden = webglActive;
+}
+
 function fitCanvases() {
-    view.w = mainCanvas.clientWidth;
-    view.h = mainCanvas.clientHeight;
+    const refCanvas = useWebGL ? glCanvas : c2dCanvas;
+    view.w = Math.max(1, refCanvas.clientWidth || window.innerWidth);
+    view.h = Math.max(1, refCanvas.clientHeight || window.innerHeight);
     view.dpr = Math.min(window.devicePixelRatio || 1, quality.maxDpr);
-    mainCanvas.width = Math.round(view.w * view.dpr);
-    mainCanvas.height = Math.round(view.h * view.dpr);
-    mainCtx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
-    // The depth canvas renders at reduced resolution; CSS blur hides it.
-    const ds = config.DEPTH_RES_SCALE;
-    depthCanvas.width = Math.max(1, Math.round(view.w * ds));
-    depthCanvas.height = Math.max(1, Math.round(view.h * ds));
-    depthCtx.setTransform(ds, 0, 0, ds, 0, 0);
-}
 
-function renderBoth() {
-    renderDepth(depthCtx, simDepth, view);
-    renderMain(mainCtx, simMain, view, quality);
-}
+    const pw = Math.max(2, Math.round(view.w * view.dpr));
+    const ph = Math.max(2, Math.round(view.h * view.dpr));
 
-function rebuild() {
-    fitCanvases();
-    if (simMain) {
-        simMain.rebuild(view.w, view.h);
-        simDepth.rebuild(view.w, view.h);
-    } else {
-        simMain = new Simulation(view.w, view.h, {
-            rotFactor: config.ROT_MAIN,
-            fgBokeh: true,
-            stars: true,
-        });
-        simDepth = new Simulation(view.w, view.h, {
-            spacingScale: config.DEPTH_SPACING_SCALE,
-            rotFactor: config.ROT_DEPTH,
-            signalMax: config.DEPTH_SIGNAL_MAX,
-            spawnMin: config.DEPTH_SPAWN_MIN_S,
-            spawnMax: config.DEPTH_SPAWN_MAX_S,
-            speedScale: config.DEPTH_SPEED_SCALE,
-            mono: true,
-            palette: config.DEPTH_SIGNAL_COLORS,
-            bokehColors: config.DEPTH_BOKEH_COLORS,
-            bokehAlphaScale: config.DEPTH_BOKEH_ALPHA_SCALE,
-            dust: true,
-            bokeh: true,
-        });
+    glCanvas.width = pw;
+    glCanvas.height = ph;
+    c2dCanvas.width = pw;
+    c2dCanvas.height = ph;
+    if (c2dRenderer?.ctx) {
+        c2dRenderer.ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
     }
-    applyQuality();
-    if (reducedMotion.matches) renderBoth();
+}
+
+function renderOnce() {
+    if (!sim) return;
+    if (useWebGL && glRenderer?.ready) {
+        glRenderer.render(sim, view, quality);
+    } else if (c2dRenderer) {
+        c2dRenderer.render(sim, view);
+    }
+}
+
+function rebuildSim() {
+    fitCanvases();
+    if (sim) {
+        sim.resize(view.w, view.h);
+    } else {
+        sim = new CoupledSimulation(view.w, view.h);
+    }
+    if (reducedMotion.matches) renderOnce();
 }
 
 function onResize() {
+    const refCanvas = useWebGL ? glCanvas : c2dCanvas;
+    const cw = Math.max(1, refCanvas.clientWidth || window.innerWidth);
+    const ch = Math.max(1, refCanvas.clientHeight || window.innerHeight);
     const dpr = Math.min(window.devicePixelRatio || 1, quality.maxDpr);
-    // The canvases are sized with 100lvh, so mobile browser bars toggling the
-    // window height do not change them; only genuine size changes get through.
-    if (mainCanvas.clientWidth === view.w && mainCanvas.clientHeight === view.h
-        && dpr === view.dpr) return;
+    if (cw === view.w && ch === view.h && dpr === view.dpr) return;
+
     fitCanvases();
-    if (simMain && !reducedMotion.matches) renderBoth();
+    if (sim && !reducedMotion.matches) renderOnce();
     clearTimeout(rebuildTimer);
-    rebuildTimer = setTimeout(rebuild, config.RESIZE_REBUILD_MS);
+    rebuildTimer = setTimeout(rebuildSim, config.RESIZE_DEBOUNCE_MS);
 }
 
-// --- Quality governor ------------------------------------------------------
+// --- Quality governor -------------------------------------------------------
 
 let qFrames = 0;
 let qAcc = 0;
 
 function degrade() {
     const step = config.QUALITY_STEPS[quality.step++];
-    quality.depthEvery = step.depthEvery;
-    if (step.torch === false) quality.torch = false;
-    if (step.fgBokeh === false) quality.fgBokeh = false;
+    if (step.marchSteps) quality.marchSteps = step.marchSteps;
+    if (step.tracers) quality.tracers = step.tracers;
+    if (step.gsSubsteps) quality.gsSubsteps = step.gsSubsteps;
+    if (step.pressureIters) quality.pressureIters = step.pressureIters;
     if (step.maxDpr) {
         quality.maxDpr = step.maxDpr;
         fitCanvases();
+        renderOnce();
     }
-    applyQuality();
-    // Degrading runs after this frame has been drawn, and resizing a canvas
-    // clears it. Without an immediate repaint the far layer would stay blank
-    // until its next turn, which is now every fourth frame.
-    renderBoth();
 }
 
 function governQuality(dt) {
@@ -139,43 +124,26 @@ function governQuality(dt) {
     qAcc = 0;
 }
 
-// --- Animation loop --------------------------------------------------------
+// --- Animation loop ---------------------------------------------------------
 
 let last = 0;
-let frameNo = 0;
-
-const TAU_SWAY = Math.PI * 2 * config.SWAY_FREQ;
-const ROT_SPEED = config.ROT_SPEED_DEG_S * Math.PI / 180;
 
 function frame(now) {
     rafId = requestAnimationFrame(frame);
-    const dt = Math.min((now - last) / 1000, 0.1);
+    const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
     elapsed += dt;
 
-    const pointerEase = Math.min(1, 5 * dt);
-    view.pointer.strength +=
-        (view.pointer.targetStrength - view.pointer.strength) * pointerEase;
-    const parallaxEase = Math.min(1, config.PARALLAX_EASE * dt);
-    view.parallax.x += (view.parallax.tx - view.parallax.x) * parallaxEase;
-    view.parallax.y += (view.parallax.ty - view.parallax.y) * parallaxEase;
+    const pEase = Math.min(1, 5 * dt);
+    view.pointer.strength += (view.pointer.targetStrength - view.pointer.strength) * pEase;
+    sim.pointer.strength = view.pointer.strength;
 
-    // Camera: eased pointer/tilt parallax plus a slow autonomous sway and a
-    // continuous slow rotation, so the scene keeps moving on its own.
-    view.offset.x = view.parallax.x * config.PARALLAX_PX
-        + Math.sin(TAU_SWAY * elapsed + 0.9) * config.SWAY_AMP;
-    view.offset.y = view.parallax.y * config.PARALLAX_PX
-        + Math.sin(TAU_SWAY * 0.8 * elapsed + 2.3) * config.SWAY_AMP * 0.7;
-    view.rot = (ROT_SPEED * elapsed) % (Math.PI * 2);
+    const parEase = Math.min(1, config.PARALLAX_EASE * dt);
+    view.parallax.x += (view.parallax.tx - view.parallax.x) * parEase;
+    view.parallax.y += (view.parallax.ty - view.parallax.y) * parEase;
 
-    simMain.update(dt);
-    simDepth.update(dt);
-    // The depth canvas sits behind a 5px blur, so skipping frames on it is
-    // invisible and roughly halves the total fill cost.
-    frameNo++;
-    if (frameNo % quality.depthEvery === 0) renderDepth(depthCtx, simDepth, view);
-    renderMain(mainCtx, simMain, view, quality);
-
+    sim.update(dt, quality);
+    renderOnce();
     governQuality(dt);
 }
 
@@ -190,17 +158,29 @@ function stopLoop() {
     rafId = null;
 }
 
-// --- Input -----------------------------------------------------------------
+// --- Input ------------------------------------------------------------------
 
 let touchDragging = false;
+let prevNormX = 0.5;
+let prevNormY = 0.5;
 
-function aimPointer(x, y) {
-    view.pointer.x = x;
-    view.pointer.y = y;
+function aimPointer(clientX, clientY) {
+    const nx = Math.max(0, Math.min(1, clientX / Math.max(1, view.w)));
+    const ny = Math.max(0, Math.min(1, clientY / Math.max(1, view.h)));
+    const vx = nx - prevNormX;
+    const vy = ny - prevNormY;
+    prevNormX = nx;
+    prevNormY = ny;
+
+    view.pointer.x = nx;
+    view.pointer.y = ny;
     view.pointer.targetStrength = 1;
-    // The scene shifts slightly away from the cursor for a depth effect.
-    view.parallax.tx = (0.5 - x / Math.max(1, view.w)) * 2;
-    view.parallax.ty = (0.5 - y / Math.max(1, view.h)) * 2;
+    view.parallax.tx = (0.5 - nx) * 2;
+    view.parallax.ty = (ny - 0.5) * 2;
+
+    if (sim && !reducedMotion.matches) {
+        sim.pointerMove(nx, ny, vx, vy);
+    }
 }
 
 const resetPointer = () => {
@@ -210,16 +190,12 @@ const resetPointer = () => {
     view.parallax.ty = 0;
 };
 
-// A mouse or pen aims the torch just by hovering.
 window.addEventListener('pointermove', (ev) => {
-    if (ev.pointerType === 'touch') return; // handled by the touch listeners
+    if (ev.pointerType === 'touch') return;
     aimPointer(ev.clientX, ev.clientY);
 }, { passive: true });
 
-// A finger has to be down, so a drag sweeps the light across the mesh
-// instead of doing nothing. This uses touch events rather than pointer
-// events because browsers fire pointercancel the moment they consider
-// claiming the gesture for a scroll, which would cut a drag short.
+// Touch drag uses touch events so mobile scroll arbitration doesn't cancel drags
 const onTouch = (ev) => {
     const touch = ev.touches[0];
     if (!touch) return;
@@ -231,20 +207,15 @@ window.addEventListener('touchmove', onTouch, { passive: true });
 window.addEventListener('touchend', resetPointer, { passive: true });
 window.addEventListener('touchcancel', resetPointer, { passive: true });
 
-// Click or tap anywhere (except the links) pops the nearest node and
-// bursts a few signals out of it.
 window.addEventListener('pointerdown', (ev) => {
     dismissHint();
-    if (reducedMotion.matches || !simMain) return;
+    if (reducedMotion.matches || !sim) return;
     if (ev.target && ev.target.closest && ev.target.closest('a, button')) return;
-    const p = screenToLayer(view, config.OFFSET_MAIN, config.ROT_MAIN,
-        ev.clientX, ev.clientY);
-    simMain.burstAt(p.x, p.y);
+    const nx = Math.max(0, Math.min(1, ev.clientX / Math.max(1, view.w)));
+    const ny = Math.max(0, Math.min(1, ev.clientY / Math.max(1, view.h)));
+    sim.interactAt(nx, ny, sim.targetMood);
 }, { passive: true });
 
-// Tilting a phone drives the same parallax a mouse does. No permission is
-// requested: where the browser withholds the sensor the listener simply
-// never fires and the scene keeps swaying on its own.
 let tiltBase = null;
 window.addEventListener('deviceorientation', (ev) => {
     if (reducedMotion.matches || ev.beta === null || ev.gamma === null) return;
@@ -252,37 +223,47 @@ window.addEventListener('deviceorientation', (ev) => {
         tiltBase = { beta: ev.beta, gamma: ev.gamma };
         return;
     }
-    // The neutral pose slowly follows the phone, so a tilted reading pose
-    // relaxes back to centre instead of pinning at full deflection.
     tiltBase.beta += (ev.beta - tiltBase.beta) * config.TILT_RECENTER;
     tiltBase.gamma += (ev.gamma - tiltBase.gamma) * config.TILT_RECENTER;
     if (touchDragging) return;
     const range = config.TILT_RANGE_DEG;
     const gx = Math.max(-1, Math.min(1, (ev.gamma - tiltBase.gamma) / range));
     const gy = Math.max(-1, Math.min(1, (ev.beta - tiltBase.beta) / range));
-    // Device axes are fixed to the hardware; rotate them into screen axes.
     const a = -(window.screen?.orientation?.angle || 0) * Math.PI / 180;
     const cos = Math.cos(a), sin = Math.sin(a);
     view.parallax.tx = -(gx * cos - gy * sin);
-    view.parallax.ty = -(gx * sin + gy * cos);
+    view.parallax.ty = gx * sin + gy * cos;
 }, { passive: true });
 
-// Hovering (or keyboard-focusing) a button pushes flares out of the mesh
-// right behind it. The button itself stays put — only the field reacts.
-let lastButtonFlares = -Infinity;
-const fireButtonFlares = (ev) => {
-    if (reducedMotion.matches || !simMain) return;
-    const now = performance.now();
-    if (now - lastButtonFlares < config.BUTTON_FLARE_COOLDOWN_MS) return;
-    lastButtonFlares = now;
-    const r = ev.currentTarget.getBoundingClientRect();
-    const p = screenToLayer(view, config.OFFSET_MAIN, config.ROT_MAIN,
-        r.left + r.width / 2, r.top + r.height / 2);
-    simMain.fireFlares(config.BUTTON_FLARE_COUNT, p.x, p.y);
-};
+let lastButtonPulse = -Infinity;
 for (const button of document.querySelectorAll('.button')) {
-    button.addEventListener('pointerenter', fireButtonFlares);
-    button.addEventListener('focus', fireButtonFlares);
+    button.addEventListener('pointermove', (ev) => {
+        const r = button.getBoundingClientRect();
+        button.style.setProperty('--mx', `${ev.clientX - r.left}px`);
+        button.style.setProperty('--my', `${ev.clientY - r.top}px`);
+    }, { passive: true });
+
+    const onEnter = (ev) => {
+        if (!sim || reducedMotion.matches) return;
+        const mood = Number(ev.currentTarget.dataset.mood || 0);
+        sim.targetMood = mood;
+        const now = performance.now();
+        if (now - lastButtonPulse < config.BUTTON_PULSE_COOLDOWN_MS) return;
+        lastButtonPulse = now;
+        const r = ev.currentTarget.getBoundingClientRect();
+        const nx = (r.left + r.width / 2) / Math.max(1, view.w);
+        const ny = (r.top + r.height / 2) / Math.max(1, view.h);
+        sim.buttonHoverPulse(nx, ny, mood);
+    };
+
+    const onLeave = () => {
+        if (sim) sim.targetMood = 0;
+    };
+
+    button.addEventListener('pointerenter', onEnter);
+    button.addEventListener('focus', onEnter);
+    button.addEventListener('pointerleave', onLeave);
+    button.addEventListener('blur', onLeave);
 }
 
 root.addEventListener('mouseleave', resetPointer);
@@ -290,10 +271,9 @@ window.addEventListener('blur', resetPointer);
 window.addEventListener('resize', onResize);
 window.addEventListener('orientationchange', () => {
     clearTimeout(rebuildTimer);
-    rebuildTimer = setTimeout(rebuild, config.ORIENTATION_REBUILD_MS);
+    rebuildTimer = setTimeout(rebuildSim, config.ORIENTATION_DEBOUNCE_MS);
 });
 
-// Nothing to animate for an unseen page; this matters most on phones.
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) stopLoop();
     else startLoop();
@@ -303,20 +283,33 @@ if (typeof reducedMotion.addEventListener === 'function') {
     reducedMotion.addEventListener('change', () => {
         if (reducedMotion.matches) {
             stopLoop();
-            view.offset.x = 0;
-            view.offset.y = 0;
-            view.rot = 0;
-            renderBoth();
+            view.parallax.x = 0;
+            view.parallax.y = 0;
+            renderOnce();
         } else {
             startLoop();
         }
     });
 }
 
-// --- Load choreography -----------------------------------------------------
-// The mesh switches on with a wave from the centre while the text fades and
-// sharpens into place. Waiting for the webfont keeps the headline from
-// reflowing mid-reveal.
+// --- WebGL2 context loss & recovery -----------------------------------------
+
+glCanvas.addEventListener('webglcontextlost', (ev) => {
+    ev.preventDefault();
+    setBackend(false);
+    fitCanvases();
+    renderOnce();
+});
+
+glCanvas.addEventListener('webglcontextrestored', () => {
+    if (sim && glRenderer?.rebuildResources(sim)) {
+        setBackend(true);
+        fitCanvases();
+        renderOnce();
+    }
+});
+
+// --- Load choreography ------------------------------------------------------
 
 let hintTimer = 0;
 
@@ -332,19 +325,26 @@ function reveal() {
     revealed = true;
     root.classList.add('is-ready');
     if (!reducedMotion.matches) {
-        simMain.ignite(config.IGNITE_DELAY_S);
-        simDepth.ignite(config.IGNITE_DEPTH_DELAY_S);
+        sim.ignite();
         hintTimer = setTimeout(dismissHint, config.HINT_TIMEOUT_MS);
     } else {
         root.classList.add('hint-done');
     }
 }
 
-rebuild();
+// Bootstrap
+c2dRenderer = new Canvas2DRenderer(c2dCanvas);
+glRenderer = new WebGL2Renderer(glCanvas);
+fitCanvases();
+sim = new CoupledSimulation(view.w, view.h);
+const glReady = glRenderer.init(sim);
+setBackend(glReady);
+fitCanvases();
+renderOnce();
 startLoop();
 
 const fontsReady = document.fonts ? document.fonts.ready : Promise.resolve();
 Promise.race([
     fontsReady,
-    new Promise(r => setTimeout(r, config.FONT_WAIT_MS)),
+    new Promise((r) => setTimeout(r, config.FONT_WAIT_MS)),
 ]).then(reveal);
