@@ -24,6 +24,14 @@ body {
 body {
     font-family: 'Fira Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
     background-color: var(--bg);
+    /* Static stand-in for the black hole: what shows before the first frame,
+       without JavaScript, and through the canvas while it fades in. */
+    background-image: radial-gradient(circle at 50% 50%,
+        #000 0, #000 22.5vmin,
+        rgba(255, 190, 110, 0.55) 23vmin,
+        rgba(214, 112, 40, 0.20) 27vmin,
+        rgba(150, 62, 20, 0.08) 40vmin,
+        rgba(5, 7, 13, 0) 62vmin);
     color: #fff;
     overflow-x: hidden;
     /* One screen, no scrolling: kill rubber-banding, double-tap zoom delay
@@ -44,7 +52,6 @@ body {
     display: block;
     pointer-events: none;
     z-index: -1;
-    background-color: var(--bg);
     contain: strict;
 }
 

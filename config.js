@@ -44,6 +44,12 @@ export const config = {
     PARALLAX_YAW: 0.10,
     PARALLAX_PITCH: 0.07,
     PARALLAX_EASE: 4.5,
+    // Slow autonomous camera sway (in parallax units) so the scene is never frozen.
+    DRIFT_X: 0.22,
+    DRIFT_Y: 0.16,
+    // The camera starts this fraction further out and flies in on load.
+    INTRO_PULLBACK: 0.42,
+    INTRO_EASE: 1.1,
 
     // --- Relativistic Absorbed Particles (Paczynski-Wiita Potential) ---------
     MAX_PARTICLES: 1000,
@@ -56,17 +62,28 @@ export const config = {
     BUTTON_PULSE_COUNT: 12,
     BUTTON_PULSE_COOLDOWN_MS: 320,
 
-    // --- WebGL2 Geodesic Raymarch & HDR Quality Governor ---------------------
+    // --- WebGL2 Geodesic Raymarch, Dust & Bloom ----------------------------
     BH_MARCH_STEPS: 72,
     MAX_DPR: 1.5,
+    DUST_COUNT: 18000,
+    BLOOM_LEVELS: 5,
+    BLOOM_STRENGTH: 0.9,
+
+    // --- Adaptive Quality Governor (see quality.js) --------------------------
+    // The scene renders at canvas size x scale and is upscaled on composite.
+    SCALE_START: 1.0,
+    SCALE_START_LOW_POWER: 0.7,
+    SCALE_MIN: 0.5,
+    SCALE_DOWN: 0.8,
+    SCALE_UP: 1.15,
     QUALITY_GRACE_S: 2.2,
     QUALITY_SAMPLE_S: 1.0,
-    QUALITY_MIN_FPS: 44,
-    QUALITY_STEPS: [
-        { bloom: false },
-        { marchSteps: 56, maxDpr: 1.2 },
-        { marchSteps: 44, maxDpr: 1.0, maxParticles: 500 },
-    ],
+    QUALITY_SLOW: 0.8,       // below this fraction of the target fps: step down
+    QUALITY_GOOD: 0.95,      // above this fraction: counts toward stepping up
+    QUALITY_PROBE_S: 5,      // steady seconds before trying a step up
+    QUALITY_PROBE_MAX_S: 80, // a failed step up doubles the wait, up to this
+    // Applied on top of the minimum scale when even that cannot hold frame rate.
+    LITE: { marchSteps: 44, bloom: false, dust: 5000, maxParticles: 500 },
 
     // --- UI Timing & Device Tilt ---------------------------------------------
     RESIZE_DEBOUNCE_MS: 180,

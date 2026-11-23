@@ -2,12 +2,13 @@
 // Bootstraps the relativistic Black Hole simulation: WebGL2 geodesic raymarch
 // + HDR bloom renderer with automatic Canvas 2D fallback, fixed sky-locked
 // starfield, cursor matter emission & horizon oblivion absorption, link-hover
-// spacetime transitions (M87* -> Gargantua / Cygnus X-1), FPS quality governor,
-// and reduced-motion handling.
+// spacetime transitions (M87* -> Gargantua / Cygnus X-1), adaptive quality
+// governor with a ~60 fps cap, and reduced-motion handling.
 
 import { config } from './config.js';
 import { BlackHoleSimulation } from './simulation.js';
 import { WebGL2Renderer, Canvas2DRenderer } from './renderer.js';
+import { QualityGovernor } from './quality.js';
 
 const root = document.documentElement;
 const glCanvas = document.getElementById('bg-gl');
@@ -22,14 +23,14 @@ const view = {
     parallax: { x: 0, y: 0, tx: 0, ty: 0 },
 };
 
-// Quality degrades once, in steps, if the device cannot hold frame rate.
-const quality = {
-    step: 0,
-    maxDpr: config.MAX_DPR,
-    marchSteps: config.BH_MARCH_STEPS,
-    maxParticles: config.MAX_PARTICLES,
-    bloom: true,
-};
+// Weak or power-saving devices start at a lower render scale; the governor
+// takes it from there in both directions.
+const lowPower = (navigator.hardwareConcurrency || 8) <= 4
+    || (navigator.deviceMemory || 8) <= 4
+    || navigator.connection?.saveData === true
+    || window.matchMedia('(pointer: coarse)').matches;
+const governor = new QualityGovernor(lowPower);
+let quality = governor.settings;
 
 let sim = null;
 let glRenderer = null;
@@ -37,7 +38,7 @@ let c2dRenderer = null;
 let useWebGL = false;
 let rafId = null;
 let rebuildTimer = 0;
-let elapsed = 0;
+const camOffset = { x: 0, y: 0 };
 
 function setBackend(webglActive) {
     useWebGL = webglActive;
@@ -49,7 +50,7 @@ function fitCanvases() {
     const refCanvas = useWebGL ? glCanvas : c2dCanvas;
     view.w = Math.max(1, refCanvas.clientWidth || window.innerWidth);
     view.h = Math.max(1, refCanvas.clientHeight || window.innerHeight);
-    view.dpr = Math.min(window.devicePixelRatio || 1, quality.maxDpr);
+    view.dpr = Math.min(window.devicePixelRatio || 1, config.MAX_DPR);
 
     const pw = Math.max(2, Math.round(view.w * view.dpr));
     const ph = Math.max(2, Math.round(view.h * view.dpr));
@@ -86,7 +87,7 @@ function onResize() {
     const refCanvas = useWebGL ? glCanvas : c2dCanvas;
     const cw = Math.max(1, refCanvas.clientWidth || window.innerWidth);
     const ch = Math.max(1, refCanvas.clientHeight || window.innerHeight);
-    const dpr = Math.min(window.devicePixelRatio || 1, quality.maxDpr);
+    const dpr = Math.min(window.devicePixelRatio || 1, config.MAX_DPR);
     if (cw === view.w && ch === view.h && dpr === view.dpr) return;
 
     fitCanvases();
@@ -95,43 +96,39 @@ function onResize() {
     rebuildTimer = setTimeout(rebuildSim, config.RESIZE_DEBOUNCE_MS);
 }
 
-// --- Quality governor -------------------------------------------------------
-
-let qFrames = 0;
-let qAcc = 0;
-
-function degrade() {
-    const step = config.QUALITY_STEPS[quality.step++];
-    if (step.marchSteps) quality.marchSteps = step.marchSteps;
-    if (step.maxParticles) quality.maxParticles = step.maxParticles;
-    if (typeof step.bloom === 'boolean') quality.bloom = step.bloom;
-    if (step.maxDpr) {
-        quality.maxDpr = step.maxDpr;
-        fitCanvases();
-        renderOnce();
-    }
-}
-
-function governQuality(dt) {
-    if (quality.step >= config.QUALITY_STEPS.length) return;
-    if (elapsed < config.QUALITY_GRACE_S) return;
-    qFrames++;
-    qAcc += dt;
-    if (qAcc < config.QUALITY_SAMPLE_S) return;
-    if (qFrames / qAcc < config.QUALITY_MIN_FPS) degrade();
-    qFrames = 0;
-    qAcc = 0;
-}
-
 // --- Animation loop ---------------------------------------------------------
 
+// The first rAF callbacks only time the display, without rendering, so a slow
+// GPU cannot pass for a slow screen. High-refresh displays then render every
+// Nth callback (~60 fps): a background should not double the GPU load.
+const CALIBRATION_FRAMES = 12;
+const rafTimes = [];
+let frameEvery = 1;
+let targetFps = 60;
+let rafCount = 0;
 let last = 0;
+
+function calibrate(now) {
+    rafTimes.push(now);
+    if (rafTimes.length < CALIBRATION_FRAMES) return;
+    const gaps = rafTimes.slice(1).map((t, i) => t - rafTimes[i]).sort((a, b) => a - b);
+    const hz = Math.max(30, Math.min(240, 1000 / gaps[gaps.length >> 1]));
+    frameEvery = Math.max(1, Math.floor(hz / 60 + 0.25));
+    targetFps = hz / frameEvery;
+    last = now;
+}
 
 function frame(now) {
     rafId = requestAnimationFrame(frame);
-    const dt = Math.min((now - last) / 1000, 0.05);
+    if (rafTimes.length < CALIBRATION_FRAMES) {
+        calibrate(now);
+        return;
+    }
+    if (++rafCount % frameEvery) return;
+
+    const rawDt = (now - last) / 1000;
+    const dt = Math.min(rawDt, 0.05);
     last = now;
-    elapsed += dt;
 
     const pEase = Math.min(1, 5 * dt);
     view.pointer.strength += (view.pointer.targetStrength - view.pointer.strength) * pEase;
@@ -141,9 +138,11 @@ function frame(now) {
     view.parallax.x += (view.parallax.tx - view.parallax.x) * parEase;
     view.parallax.y += (view.parallax.ty - view.parallax.y) * parEase;
 
-    sim.update(dt, quality, view.parallax);
+    camOffset.x = view.parallax.x + config.DRIFT_X * Math.sin(sim.time * 0.11);
+    camOffset.y = view.parallax.y + config.DRIFT_Y * Math.sin(sim.time * 0.077 + 1.3);
+    sim.update(dt, quality, camOffset);
     renderOnce();
-    governQuality(dt);
+    if (useWebGL && governor.sample(rawDt, targetFps)) quality = governor.settings;
 }
 
 function startLoop() {

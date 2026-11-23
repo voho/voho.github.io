@@ -14,6 +14,7 @@ export class BlackHoleSimulation {
         this.height = 1;
         this.time = 0;
         this.igniteT = 0;
+        this.dolly = 0; // 1 = pulled back for the intro fly-in, eases to 0
         this.absorbGlow = 0;
         this.targetMood = 0;
         this.capturedCount = 0;
@@ -45,6 +46,7 @@ export class BlackHoleSimulation {
             vv: new Float32Array([0, 1, 0]),
             ww: new Float32Array([0, 0, -1]),
             fov: config.CAM_FOV,
+            baseDist: config.CAM_DIST,
             dist: config.CAM_DIST,
         };
 
@@ -78,7 +80,7 @@ export class BlackHoleSimulation {
         this.width = Math.max(1, width);
         this.height = Math.max(1, height);
         const aspect = this.width / this.height;
-        this.cam.dist = aspect < config.NARROW_ASPECT ? config.NARROW_CAM_DIST : config.CAM_DIST;
+        this.cam.baseDist = aspect < config.NARROW_ASPECT ? config.NARROW_CAM_DIST : config.CAM_DIST;
         this.cam.fov = config.CAM_FOV;
     }
 
@@ -111,6 +113,7 @@ export class BlackHoleSimulation {
 
     updateCamera(parallaxX = 0, parallaxY = 0) {
         const cam = this.cam;
+        cam.dist = cam.baseDist * (1 + config.INTRO_PULLBACK * this.dolly);
         const yaw = -parallaxX * config.PARALLAX_YAW;
         const pitch = -parallaxY * config.PARALLAX_PITCH;
         const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
@@ -270,6 +273,7 @@ export class BlackHoleSimulation {
 
     ignite() {
         this.igniteT = 0;
+        this.dolly = 1;
         this.absorbGlow = Math.max(this.absorbGlow, 0.65);
         this.emitShowcaseBurst(config.IGNITE_BURST_COUNT);
     }
@@ -469,6 +473,7 @@ export class BlackHoleSimulation {
         this.time += clampedDt;
         this.igniteT += clampedDt;
         this.absorbGlow *= Math.exp(-clampedDt * 2.4);
+        this.dolly *= Math.exp(-clampedDt * config.INTRO_EASE);
 
         if (this.pointer.down) {
             this._emitAccum += clampedDt * config.HOLD_EMIT_RATE;
