@@ -24,7 +24,7 @@ export class QualityGovernor {
             scale: this.scale,
             marchSteps: lite ? lite.marchSteps : config.BH_MARCH_STEPS,
             bloom: lite ? lite.bloom : true,
-            dust: lite ? lite.dust : config.DUST_COUNT,
+            dust: Math.round(config.DUST_COUNT * (lite ? lite.dustFraction : this.scale)),
             maxParticles: lite ? lite.maxParticles : config.MAX_PARTICLES,
         };
     }

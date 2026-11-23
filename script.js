@@ -10,6 +10,10 @@ import { BlackHoleSimulation } from './simulation.js';
 import { WebGL2Renderer, Canvas2DRenderer } from './renderer.js';
 import { QualityGovernor } from './quality.js';
 
+// Preview switch for alternative looks: index.html?look=<name>.
+const look = config.LOOKS[new URLSearchParams(location.search).get('look')];
+if (look) Object.assign(config, look);
+
 const root = document.documentElement;
 const glCanvas = document.getElementById('bg-gl');
 const c2dCanvas = document.getElementById('bg-2d');
@@ -138,7 +142,8 @@ function frame(now) {
     view.parallax.x += (view.parallax.tx - view.parallax.x) * parEase;
     view.parallax.y += (view.parallax.ty - view.parallax.y) * parEase;
 
-    camOffset.x = view.parallax.x + config.DRIFT_X * Math.sin(sim.time * 0.11);
+    camOffset.x = view.parallax.x + config.DRIFT_X * Math.sin(sim.time * 0.11)
+        + config.ORBIT_RATE * sim.time;
     camOffset.y = view.parallax.y + config.DRIFT_Y * Math.sin(sim.time * 0.077 + 1.3);
     sim.update(dt, quality, camOffset);
     renderOnce();

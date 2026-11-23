@@ -21,6 +21,14 @@ A real-time general-relativistic Black Hole and particle absorption simulation r
 - `quality.js` — DOM-free `QualityGovernor`: trades render scale, then effects, for frame rate and probes back up with exponential backoff.
 - `script.js` — WebGL2 initialization, `webglcontextlost` fallback/recovery, `100lvh`-safe responsive sizing, pointer/hold particle streaming, device tilt parallax, link/button hover spacetime transitions, intro fly-in and idle camera drift, display-rate calibration with a ~60 fps cap, and `prefers-reduced-motion` handling.
 
+## Preview looks
+
+Three alternative looks are selectable with a query parameter; without it the page is unchanged. They are presets in `config.LOOKS` applied over the defaults by `script.js`.
+
+- `?look=cinematic` — edge-on disk with the lensed arc over the shadow, anamorphic streak, film grain, breathing tilt.
+- `?look=deepfield` — a small, distant hole placed beside the text, bending a procedural galaxy band while the camera slowly orbits.
+- `?look=particles` — the disk made of 160,000 GPU grains gathered into spiral arms over a faint gas glow.
+
 ## Interaction
 
 - **Default resting state** — opens in **M87\* Horizon** with a face-on obsidian shadow framing centered typography, crescent photon ring, and ambient spiralling matter.
