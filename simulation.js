@@ -23,7 +23,6 @@ export class BlackHoleSimulation {
         this.drawCount = 0;
         this._emitAccum = 0;
         this._worldOut = new Float32Array(3);
-        this.center = new Float32Array(2);
 
         this.pointer = { x: 0.5, y: 0.5, vx: 0, vy: 0, down: false, strength: 0 };
 
@@ -84,7 +83,6 @@ export class BlackHoleSimulation {
         const aspect = this.width / this.height;
         this.cam.baseDist = aspect < config.NARROW_ASPECT ? config.NARROW_CAM_DIST : config.CAM_DIST;
         this.cam.fov = config.CAM_FOV;
-        this.center.set(aspect < config.NARROW_ASPECT ? config.NARROW_CENTER : config.CENTER);
     }
 
     updateBhBasis(dt) {
@@ -144,8 +142,8 @@ export class BlackHoleSimulation {
 
     cursorToWorld(nx, ny, out = this._worldOut) {
         const minDim = Math.max(1, Math.min(this.width, this.height));
-        const uvx = (nx * this.width - 0.5 * this.width) / minDim - this.center[0];
-        const uvy = ((1 - ny) * this.height - 0.5 * this.height) / minDim - this.center[1];
+        const uvx = (nx * this.width - 0.5 * this.width) / minDim;
+        const uvy = ((1 - ny) * this.height - 0.5 * this.height) / minDim;
         const cam = this.cam, bhN = this.bhN;
 
         const rdx = uvx * cam.uu[0] + uvy * cam.vv[0] + cam.fov * cam.ww[0];
@@ -315,7 +313,6 @@ export class BlackHoleSimulation {
         const ndcScaleX = (2 * minDim) / this.width;
         const ndcScaleY = (2 * minDim) / this.height;
         const camWorldRatio = cam.dist / cam.fov;
-        const cX = this.center[0], cY = this.center[1];
         const tdDamp = Math.exp(-dt * 2.4);
         const sink = 1 - dt * 0.48;
         const fadeDecay = Math.exp(-dt * 2.0);
@@ -448,10 +445,10 @@ export class BlackHoleSimulation {
                 cb *= fade * fade * sF;    // fade^2.50
             }
 
-            const ndcHx = (ax + cX) * ndcScaleX, ndcHy = (ay + cY) * ndcScaleY;
+            const ndcHx = ax * ndcScaleX, ndcHy = ay * ndcScaleY;
             const lineOff = drawIdx * 12;
-            pLineBuf[lineOff] = (tax + cX) * ndcScaleX;
-            pLineBuf[lineOff + 1] = (tay + cY) * ndcScaleY;
+            pLineBuf[lineOff] = tax * ndcScaleX;
+            pLineBuf[lineOff + 1] = tay * ndcScaleY;
             pLineBuf[lineOff + 2] = cr; pLineBuf[lineOff + 3] = cg; pLineBuf[lineOff + 4] = cb;
             pLineBuf[lineOff + 5] = alpha * 0.18;
 
@@ -479,7 +476,7 @@ export class BlackHoleSimulation {
         this.igniteT += clampedDt;
         this.absorbGlow *= Math.exp(-clampedDt * 2.4);
         this.dolly *= Math.exp(-clampedDt * config.INTRO_EASE);
-        this.skyAngle += clampedDt * config.ORBIT_RATE;
+        this.skyAngle += clampedDt * config.SKY_TURN_RATE;
 
         if (this.pointer.down) {
             this._emitAccum += clampedDt * config.HOLD_EMIT_RATE;

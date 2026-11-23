@@ -13,6 +13,7 @@ export class QualityGovernor {
         this.probeAfter = config.QUALITY_PROBE_S;
         this.time = 0;
         this.frames = 0;
+        this.expected = 0;
         this.goodTime = 0;
         this.sinceUp = Infinity;
     }
@@ -36,14 +37,19 @@ export class QualityGovernor {
             return false;
         }
         // One long hiccup (GC, tab wake) must not read as a slow GPU.
-        this.time += Math.min(dt, 0.1);
+        const clamped = Math.min(dt, 0.1);
+        this.time += clamped;
         this.frames++;
+        // The target changes when the loop goes idle, so count expected
+        // frames as they come instead of dividing by one target at the end.
+        this.expected += clamped * targetFps;
         if (this.time < config.QUALITY_SAMPLE_S) return false;
 
-        const ratio = this.frames / this.time / targetFps;
+        const ratio = this.frames / this.expected;
         this.sinceUp += this.time;
         this.time = 0;
         this.frames = 0;
+        this.expected = 0;
 
         if (ratio < config.QUALITY_SLOW) return this.stepDown();
         if (ratio < config.QUALITY_GOOD) {
