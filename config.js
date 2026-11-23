@@ -35,7 +35,7 @@ export const config = {
         },
     ],
 
-    // --- Look (overridden per preview look, see LOOKS below) ----------------
+    // --- Look (defaults; LOOKS below override them) --------------------------
     // Row i: how much variant i draws from each disk palette (amber, gold-white, sapphire).
     PALETTES: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
     CENTER: [0, 0],           // where the hole sits, in min-dimension units from screen centre
@@ -46,9 +46,6 @@ export const config = {
     SKY_RICH: 0,              // 1 adds the galactic band, dust lanes and dense stars
     STREAK: 0,                // anamorphic lens streak strength
     GRAIN: 0,                 // film grain amplitude
-    DUST_GAIN: 1,
-    DUST_ARMS: 0,             // 1 gathers the grains into spiral arms
-    DUST_SIZE: 1,
     ORBIT_RATE: 0,            // the sky turning past the hole as if orbiting it, rad/s
     TILT_BREATH: 0,           // slow oscillation of the disk tilt, radians
 
@@ -102,7 +99,13 @@ export const config = {
     // Applied on top of the minimum scale when even that cannot hold frame rate.
     LITE: { marchSteps: 44, bloom: false, dustFraction: 0.28, maxParticles: 500 },
 
-    // --- Preview looks: index.html?look=<name> applies one over the defaults --
+    // --- Look blend ---------------------------------------------------------
+    // The scene rests on LOOKS.cinematic and blends toward LOOKS.deepfield as
+    // the pointer moves off-centre (script.js). Offsets are fractions of the
+    // half-width; LOOK_EASE is the approach rate per second.
+    LOOK_DEAD_ZONE: 0.3,   // wide enough that the centred links stay cinematic
+    LOOK_FULL_AT: 0.85,
+    LOOK_EASE: 0.7,
     LOOKS: {
         // Edge-on disk with the lensed arc over the shadow, shot like film.
         cinematic: {
@@ -121,8 +124,8 @@ export const config = {
             DRIFT_X: 0.5,
             DRIFT_Y: 0.3,
         },
-        // A small, distant hole beside the text, bending a rich galaxy as the
-        // camera slowly orbits it.
+        // A small, distant hole beside the text (on the side opposite the
+        // pointer), bending a rich galaxy that slowly turns past it.
         deepfield: {
             VARIANTS: [
                 { id: 0, name: 'M87* Horizon', tilt: 0.42, roll: 0.30, spin: 0.22, gm: 5.2, drag: 0.18 },
@@ -138,27 +141,6 @@ export const config = {
             DUST_COUNT: 6000,
             ORBIT_RATE: 0.012,
             INTRO_PULLBACK: 0.25,
-        },
-        // Drifts from one look into another and back on a slow loop; every
-        // setting the two differ in is interpolated (seconds).
-        journey: {
-            JOURNEY: { from: 'cinematic', to: 'deepfield', hold: 24, travel: 30 },
-        },
-        // The disk itself made of GPU grains, with only a faint gas glow under it.
-        particles: {
-            VARIANTS: [
-                { id: 0, name: 'M87* Horizon', tilt: 0.52, roll: 0.10, spin: 0.22, gm: 5.2, drag: 0.18 },
-                { id: 1, name: 'Gargantua', tilt: 0.16, roll: -0.15, spin: 0.10, gm: 4.8, drag: 0.16 },
-                { id: 2, name: 'Cygnus X-1', tilt: 1.05, roll: 0.24, spin: 0.52, gm: 5.5, drag: 0.20 },
-            ],
-            CAM_DIST: 17.5,
-            NARROW_CAM_DIST: 21,
-            DISK_GAIN: 0.24,
-            HAZE_GAIN: 0.5,
-            DUST_COUNT: 160000,
-            DUST_GAIN: 3.0,
-            DUST_ARMS: 1,
-            DUST_SIZE: 0.6,
         },
     },
 

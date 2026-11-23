@@ -27,9 +27,9 @@ body {
     /* Static stand-in for the black hole: what shows before the first frame,
        without JavaScript, and through the canvas while it fades in. */
     background-image: radial-gradient(circle at 50% 50%,
-        #000 0, #000 22.5vmin,
-        rgba(255, 190, 110, 0.55) 23vmin,
-        rgba(214, 112, 40, 0.20) 27vmin,
+        #000 0, #000 19.5vmin,
+        rgba(255, 214, 150, 0.55) 20vmin,
+        rgba(214, 132, 60, 0.20) 24vmin,
         rgba(150, 62, 20, 0.08) 40vmin,
         rgba(5, 7, 13, 0) 62vmin);
     color: #fff;

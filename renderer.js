@@ -427,7 +427,6 @@ uniform vec3 uBhT2;
 uniform vec2 uNdcScale;
 uniform vec2 uCenter;
 uniform float uPx;
-uniform vec3 uDust;     // x=gain, y=spiral arms, z=size
 out vec4 vColor;
 
 float rnd(uint v) {
@@ -447,8 +446,7 @@ void main() {
   float u1 = pow(uBhParams.x, 1.5);
   float u = mix(u0, u1, f);
   float r = pow(u, 2.0 / 3.0);
-  float phi0 = rnd(id + 3u) * 6.2831853;
-  float phi = phi0
+  float phi = rnd(id + 3u) * 6.2831853
             + 0.9 * uBhParams.w * life / (u0 - u1) * log(u0 / u);
 
   float hRnd = rnd(id + 4u);
@@ -484,14 +482,12 @@ void main() {
   float heat = clamp(1.85 / max(1.05, r) - 0.14, 0.0, 1.0);
   vec3 warm = vec3(0.96 + heat * 0.04, 0.44 + heat * 0.52, 0.14 + heat * heat * 0.84);
   vec3 cyg = vec3(0.28 + heat * 0.72, 0.62 + heat * 0.36, 1.0);
-  float size = (0.9 + 2.3 * hRnd * hRnd * hRnd) * uDust.z;
+  float size = 0.9 + 2.3 * hRnd * hRnd * hRnd;
   float px = size * uPx;
   float fade = smoothstep(0.0, 0.06, f) * smoothstep(uBhParams.x, uBhParams.x + 0.9, r);
   float twinkle = 0.70 + 0.30 * sin(uTime * (0.8 + 2.0 * hRnd) + float(gl_VertexID));
   // Grains thinner than a pixel keep their energy by dimming instead.
-  float arms = 0.5 + 0.5 * sin(phi0 * 3.0 + log(u0) * 4.5);
-  float alpha = occ * fade * twinkle * beam * (0.10 + 0.34 * heat) * min(1.0, px * px)
-              * uDust.x * mix(1.0, 0.12 + 1.5 * arms * arms, uDust.y);
+  float alpha = occ * fade * twinkle * beam * (0.10 + 0.34 * heat) * min(1.0, px * px);
 
   gl_Position = vec4((a * lens + uCenter) * uNdcScale, 0.0, 1.0);
   gl_PointSize = max(1.0, px * 2.4);
@@ -861,7 +857,6 @@ export class WebGL2Renderer {
             gl.uniform2f(d.u.uNdcScale, (2 * minDim) / sw, (2 * minDim) / sh);
             gl.uniform1f(d.u.uPx, px);
             gl.uniform2fv(d.u.uCenter, sim.center);
-            gl.uniform3f(d.u.uDust, config.DUST_GAIN, config.DUST_ARMS, config.DUST_SIZE);
             gl.drawArrays(gl.POINTS, 0, dustCount);
         }
 
