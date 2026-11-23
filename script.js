@@ -10,6 +10,40 @@ import { BlackHoleSimulation } from './simulation.js';
 import { WebGL2Renderer, Canvas2DRenderer } from './renderer.js';
 import { QualityGovernor } from './quality.js';
 
+// Preview switch for alternative looks: index.html?look=<name>.
+const defaults = { ...config };
+const look = config.LOOKS[new URLSearchParams(location.search).get('look')];
+if (look) Object.assign(config, look);
+
+// A journey look drifts between two other looks: 0 = from, 1 = to.
+const journey = config.JOURNEY && {
+    ...config.JOURNEY,
+    from: config.LOOKS[config.JOURNEY.from],
+    to: config.LOOKS[config.JOURNEY.to],
+};
+
+function mix(a, b, k) {
+    if (typeof a === 'number') return a + (b - a) * k;
+    if (Array.isArray(a)) return a.map((v, i) => mix(v, b[i], k));
+    if (a && typeof a === 'object') {
+        return Object.fromEntries(Object.keys(a).map((key) => [key, mix(a[key], b[key], k)]));
+    }
+    return a;
+}
+
+function applyJourney(time) {
+    const { from, to, hold, travel } = journey;
+    const t = time % (2 * (hold + travel));
+    const ramp = (start) => Math.max(0, Math.min(1, (t - start) / travel));
+    const k = ramp(hold) - ramp(2 * hold + travel);
+    const eased = k * k * (3 - 2 * k);
+    for (const key of Object.keys({ ...from, ...to })) {
+        config[key] = mix(from[key] ?? defaults[key], to[key] ?? defaults[key], eased);
+    }
+    // Camera distance and hole position are read on resize.
+    if (sim) sim.resize(view.w, view.h);
+}
+
 const root = document.documentElement;
 const glCanvas = document.getElementById('bg-gl');
 const c2dCanvas = document.getElementById('bg-2d');
@@ -138,11 +172,14 @@ function frame(now) {
     view.parallax.x += (view.parallax.tx - view.parallax.x) * parEase;
     view.parallax.y += (view.parallax.ty - view.parallax.y) * parEase;
 
+    if (journey) applyJourney(sim.time);
+    // Dust count follows both the governor's level and a journey's blend.
+    quality = governor.settings;
     camOffset.x = view.parallax.x + config.DRIFT_X * Math.sin(sim.time * 0.11);
     camOffset.y = view.parallax.y + config.DRIFT_Y * Math.sin(sim.time * 0.077 + 1.3);
     sim.update(dt, quality, camOffset);
     renderOnce();
-    if (useWebGL && governor.sample(rawDt, targetFps)) quality = governor.settings;
+    if (useWebGL) governor.sample(rawDt, targetFps);
 }
 
 function startLoop() {
@@ -344,6 +381,7 @@ function reveal() {
 c2dRenderer = new Canvas2DRenderer(c2dCanvas);
 glRenderer = new WebGL2Renderer(glCanvas);
 fitCanvases();
+if (journey) applyJourney(0);
 sim = new BlackHoleSimulation(view.w, view.h);
 const glReady = glRenderer.init(sim);
 setBackend(glReady);

@@ -35,6 +35,23 @@ export const config = {
         },
     ],
 
+    // --- Look (overridden per preview look, see LOOKS below) ----------------
+    // Row i: how much variant i draws from each disk palette (amber, gold-white, sapphire).
+    PALETTES: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    CENTER: [0, 0],           // where the hole sits, in min-dimension units from screen centre
+    NARROW_CENTER: [0, 0],
+    DISK_GAIN: 1,
+    DISK_OUTER: 1,            // scales the disk's outer radius
+    HAZE_GAIN: 1,
+    SKY_RICH: 0,              // 1 adds the galactic band, dust lanes and dense stars
+    STREAK: 0,                // anamorphic lens streak strength
+    GRAIN: 0,                 // film grain amplitude
+    DUST_GAIN: 1,
+    DUST_ARMS: 0,             // 1 gathers the grains into spiral arms
+    DUST_SIZE: 1,
+    ORBIT_RATE: 0,            // the sky turning past the hole as if orbiting it, rad/s
+    TILT_BREATH: 0,           // slow oscillation of the disk tilt, radians
+
     // --- Camera & Framing ----------------------------------------------------
     CAM_DIST: 15.2,
     CAM_FOV: 1.46,
@@ -83,7 +100,67 @@ export const config = {
     QUALITY_PROBE_S: 5,      // steady seconds before trying a step up
     QUALITY_PROBE_MAX_S: 80, // a failed step up doubles the wait, up to this
     // Applied on top of the minimum scale when even that cannot hold frame rate.
-    LITE: { marchSteps: 44, bloom: false, dust: 5000, maxParticles: 500 },
+    LITE: { marchSteps: 44, bloom: false, dustFraction: 0.28, maxParticles: 500 },
+
+    // --- Preview looks: index.html?look=<name> applies one over the defaults --
+    LOOKS: {
+        // Edge-on disk with the lensed arc over the shadow, shot like film.
+        cinematic: {
+            VARIANTS: [
+                { id: 0, name: 'Gargantua', tilt: 0.15, roll: -0.12, spin: 0.10, gm: 4.8, drag: 0.16 },
+                { id: 1, name: 'M87* Horizon', tilt: 1.15, roll: 0.06, spin: 0.22, gm: 5.2, drag: 0.18 },
+                { id: 2, name: 'Cygnus X-1', tilt: 0.34, roll: 0.24, spin: 0.52, gm: 5.5, drag: 0.20 },
+            ],
+            PALETTES: [[0, 1, 0], [1, 0, 0], [0, 0, 1]],
+            CAM_DIST: 19,
+            NARROW_CAM_DIST: 20.5,
+            HAZE_GAIN: 2.6,
+            STREAK: 0.55,
+            GRAIN: 0.028,
+            TILT_BREATH: 0.05,
+            DRIFT_X: 0.5,
+            DRIFT_Y: 0.3,
+        },
+        // A small, distant hole beside the text, bending a rich galaxy as the
+        // camera slowly orbits it.
+        deepfield: {
+            VARIANTS: [
+                { id: 0, name: 'M87* Horizon', tilt: 0.42, roll: 0.30, spin: 0.22, gm: 5.2, drag: 0.18 },
+                { id: 1, name: 'Gargantua', tilt: 0.16, roll: -0.15, spin: 0.10, gm: 4.8, drag: 0.16 },
+                { id: 2, name: 'Cygnus X-1', tilt: 0.34, roll: 0.24, spin: 0.52, gm: 5.5, drag: 0.20 },
+            ],
+            CAM_DIST: 30,
+            NARROW_CAM_DIST: 30,
+            CENTER: [0.56, 0.17],
+            NARROW_CENTER: [0, 0.62],
+            SKY_RICH: 1,
+            DISK_OUTER: 0.6,
+            DUST_COUNT: 6000,
+            ORBIT_RATE: 0.012,
+            INTRO_PULLBACK: 0.25,
+        },
+        // Drifts from one look into another and back on a slow loop; every
+        // setting the two differ in is interpolated (seconds).
+        journey: {
+            JOURNEY: { from: 'cinematic', to: 'deepfield', hold: 24, travel: 30 },
+        },
+        // The disk itself made of GPU grains, with only a faint gas glow under it.
+        particles: {
+            VARIANTS: [
+                { id: 0, name: 'M87* Horizon', tilt: 0.52, roll: 0.10, spin: 0.22, gm: 5.2, drag: 0.18 },
+                { id: 1, name: 'Gargantua', tilt: 0.16, roll: -0.15, spin: 0.10, gm: 4.8, drag: 0.16 },
+                { id: 2, name: 'Cygnus X-1', tilt: 1.05, roll: 0.24, spin: 0.52, gm: 5.5, drag: 0.20 },
+            ],
+            CAM_DIST: 17.5,
+            NARROW_CAM_DIST: 21,
+            DISK_GAIN: 0.24,
+            HAZE_GAIN: 0.5,
+            DUST_COUNT: 160000,
+            DUST_GAIN: 3.0,
+            DUST_ARMS: 1,
+            DUST_SIZE: 0.6,
+        },
+    },
 
     // --- UI Timing & Device Tilt ---------------------------------------------
     RESIZE_DEBOUNCE_MS: 180,

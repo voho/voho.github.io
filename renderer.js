@@ -38,6 +38,9 @@ uniform vec3 uBhN;
 uniform vec3 uBhT2;
 uniform float uMarchSteps;
 uniform float uSoftClip;  // 0.42 on 8-bit targets (range compression), 0 on half-float
+uniform vec2 uCenter;
+uniform vec3 uLook;       // x=disk gain, y=haze gain, z=rich sky
+uniform vec2 uSkyRot;     // cos, sin of the sky's turn about the vertical axis
 
 vec3 toBhLocal(vec3 p) {
   return vec3(dot(p, uBhT1), dot(p, uBhN), dot(p, uBhT2));
@@ -126,6 +129,7 @@ vec2 starGridCol(vec3 dir, float scale, float thresh) {
 }
 
 vec3 sampleLensedSky(vec3 dir) {
+  dir.xz = vec2(dir.x * uSkyRot.x - dir.z * uSkyRot.y, dir.x * uSkyRot.y + dir.z * uSkyRot.x);
   vec2 s1 = starGridCol(dir, 58.0, 0.945);
   float s2 = starGridCol(dir, 118.0, 0.962).x;
   vec3 tint1 = mix(vec3(0.66, 0.82, 1.0), vec3(1.0, 0.88, 0.72), s1.y);
@@ -138,6 +142,29 @@ vec3 sampleLensedSky(vec3 dir) {
   vec3 base = vec3(0.009, 0.013, 0.028);
   base += uNebTint * (neb * neb2 * band * 0.30);
   base += tint1 * s1.x * 1.50 + vec3(0.82, 0.90, 1.0) * s2 * 0.60;
+
+  if (uLook.z > 0.0) {
+    // Galactic band around the plane with normal g, brightest toward e1.
+    // Noise runs on a linear projection of the direction, so it has no seam.
+    const vec3 g = vec3(0.3306, 0.9418, 0.0601);
+    const vec3 e1 = vec3(-0.4460, 0.2121, -0.8696);
+    const vec3 e2 = vec3(-0.8317, 0.2607, 0.4901);
+    float lat = dot(dir, g);
+    vec2 p = vec2(dot(dir, e1), dot(dir, e2)) * 2.6 + lat * vec2(1.9, -2.3);
+    float warp = fbm4(p * 1.3 + 4.0);
+    float clouds = fbm4(p * 2.2 + warp * 1.4);
+    float lanes = fbm4(p * 4.6 - warp * 2.0 + 9.0);
+    float glowBand = exp(-lat * lat * 9.0);
+    float ridge = exp(-lat * lat * 55.0);
+    float bulge = exp(-(1.0 - dot(dir, e1)) * 3.0);
+    float dens = glowBand * (0.10 + 1.5 * clouds * clouds * clouds) + ridge * (0.30 + 1.2 * bulge);
+    dens *= 1.0 - 0.60 * smoothstep(0.40, 0.66, lanes) * exp(-lat * lat * 26.0);
+    vec3 glow = mix(vec3(0.14, 0.22, 0.52), vec3(1.00, 0.70, 0.42), bulge * (0.4 + 0.6 * ridge));
+    base += glow * dens * (0.24 * uLook.z);
+    base += vec3(0.60, 0.13, 0.24) * smoothstep(0.42, 0.72, clouds * glowBand + warp * 0.22) * (0.26 * uLook.z);
+    vec2 s3 = starGridCol(dir, 205.0, 0.90 - 0.30 * glowBand);
+    base += mix(vec3(0.75, 0.86, 1.0), vec3(1.0, 0.90, 0.76), s3.y) * s3.x * (0.85 * uLook.z);
+  }
   return base;
 }
 
@@ -201,7 +228,7 @@ vec4 evalDisk(vec3 locP, vec3 locRayDir, vec3 w, float absorb) {
 
 void main() {
   float minDim = max(1.0, min(uRes.x, uRes.y));
-  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / minDim;
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / minDim - uCenter;
 
   vec3 pos = uCamPos;
   vec3 vel = normalize(uv.x * uCamU + uv.y * uCamV + uFov * uCamW);
@@ -292,7 +319,7 @@ void main() {
       vec3 hitP = mix(prevPos, pos, frac);
       vec4 disk = evalDisk(toBhLocal(hitP), toBhLocal(vel), uWeights, uAbsorb);
       if (disk.a > 0.002) {
-        accum += disk.rgb * trans * disk.a;
+        accum += disk.rgb * (trans * disk.a * uLook.x);
         trans *= (1.0 - disk.a * 0.86);
         if (trans < 0.02) break;
       }
@@ -302,7 +329,7 @@ void main() {
     // when seen edge-on at the cost of a few multiplies per step.
     if (r < uBhParams.y) {
       float hz = max(0.0, 1.0 - abs(hCurr) * 1.5);
-      accum += uRingTint * (hz * hz * invR2 * smoothstep(uBhParams.x - 0.2, uBhParams.x + 0.7, r) * 0.42 * dt * trans);
+      accum += uRingTint * (hz * hz * invR2 * smoothstep(uBhParams.x - 0.2, uBhParams.x + 0.7, r) * 0.42 * uLook.y * dt * trans);
     }
 
     if (uWeights.z > 0.01) {
@@ -398,7 +425,9 @@ uniform vec3 uBhT1;
 uniform vec3 uBhN;
 uniform vec3 uBhT2;
 uniform vec2 uNdcScale;
+uniform vec2 uCenter;
 uniform float uPx;
+uniform vec3 uDust;     // x=gain, y=spiral arms, z=size
 out vec4 vColor;
 
 float rnd(uint v) {
@@ -418,7 +447,8 @@ void main() {
   float u1 = pow(uBhParams.x, 1.5);
   float u = mix(u0, u1, f);
   float r = pow(u, 2.0 / 3.0);
-  float phi = rnd(id + 3u) * 6.2831853
+  float phi0 = rnd(id + 3u) * 6.2831853;
+  float phi = phi0
             + 0.9 * uBhParams.w * life / (u0 - u1) * log(u0 / u);
 
   float hRnd = rnd(id + 4u);
@@ -435,13 +465,14 @@ void main() {
   // r / sqrt(1 - rs/r)); without this the grains would sit inside the
   // raymarched disk's inner edge. It fades out for grains nearer the camera.
   float lens = mix(inversesqrt(1.0 - 1.0 / r), 1.0, clamp((uCamDist - zc) / r, 0.0, 1.0));
+  // Point-mass lens for grains behind the hole. The Einstein radius grows
+  // with the depth behind it (rE^2 = 2 rs d), which is what lifts the far
+  // side of an edge-on disk into the arc over the shadow.
   if (behind > 0.01 && bW > 0.08) {
-    lens = max(lens, 0.5 * (bW + sqrt(bW * bW + 16.8 * behind)) / bW);
+    lens = max(lens, 0.5 * (bW + sqrt(bW * bW + 8.0 * (zc - uCamDist))) / bW);
   }
   float behindFade = clamp((zc - (uCamDist + 0.1)) * 1.25, 0.0, 1.0);
-  // Wider than the CPU particles' mask: the point-mass model puts images of
-  // grains behind the hole on a ring inside the raymarched disk's far arc.
-  float shadowMask = smoothstep(2.7, 3.4, bW * lens);
+  float shadowMask = smoothstep(2.55, 3.0, bW * lens);
   float occ = 1.0 - behindFade * (1.0 - shadowMask);
 
   // Relativistic beaming: the approaching side of the orbit is brighter.
@@ -453,14 +484,16 @@ void main() {
   float heat = clamp(1.85 / max(1.05, r) - 0.14, 0.0, 1.0);
   vec3 warm = vec3(0.96 + heat * 0.04, 0.44 + heat * 0.52, 0.14 + heat * heat * 0.84);
   vec3 cyg = vec3(0.28 + heat * 0.72, 0.62 + heat * 0.36, 1.0);
-  float size = 0.9 + 2.3 * hRnd * hRnd * hRnd;
+  float size = (0.9 + 2.3 * hRnd * hRnd * hRnd) * uDust.z;
   float px = size * uPx;
   float fade = smoothstep(0.0, 0.06, f) * smoothstep(uBhParams.x, uBhParams.x + 0.9, r);
   float twinkle = 0.70 + 0.30 * sin(uTime * (0.8 + 2.0 * hRnd) + float(gl_VertexID));
   // Grains thinner than a pixel keep their energy by dimming instead.
-  float alpha = occ * fade * twinkle * beam * (0.10 + 0.34 * heat) * min(1.0, px * px);
+  float arms = 0.5 + 0.5 * sin(phi0 * 3.0 + log(u0) * 4.5);
+  float alpha = occ * fade * twinkle * beam * (0.10 + 0.34 * heat) * min(1.0, px * px)
+              * uDust.x * mix(1.0, 0.12 + 1.5 * arms * arms, uDust.y);
 
-  gl_Position = vec4(a * lens * uNdcScale, 0.0, 1.0);
+  gl_Position = vec4((a * lens + uCenter) * uNdcScale, 0.0, 1.0);
   gl_PointSize = max(1.0, px * 2.4);
   vColor = vec4(mix(warm, cyg, uCyg), alpha);
 }`,
@@ -518,8 +551,11 @@ in vec2 vUv;
 out vec4 fragColor;
 uniform sampler2D uScene;
 uniform sampler2D uBloom;
+uniform sampler2D uStreakTex;
 uniform float uBloomStrength;
 uniform float uSoftClip;
+uniform vec3 uFilm;       // x=streak strength, y=streak texel step, z=grain
+uniform float uTime;
 
 vec3 aces(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
@@ -537,10 +573,23 @@ void main() {
   vec2 ca = d * r2 * 0.005;
   vec3 col = vec3(scene(vUv - ca).r, scene(vUv).g, scene(vUv + ca).b);
   col += texture(uBloom, vUv).rgb * uBloomStrength;
+  if (uFilm.x > 0.0) {
+    // Anamorphic streak: a wide horizontal smear of a coarse bloom level.
+    vec3 s = vec3(0.0);
+    for (int i = -6; i <= 6; i++) {
+      s += texture(uStreakTex, vUv + vec2(float(i) * uFilm.y, 0.0)).rgb * (1.0 - abs(float(i)) / 7.0);
+    }
+    col += s * vec3(0.50, 0.72, 1.0) * (uFilm.x / 7.0);
+  }
   col *= 1.0 - r2 * 0.30;
   col = pow(aces(col * 1.14), vec3(1.0 / 1.04));
   float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   col += (ign - 0.5) / 255.0;
+  if (uFilm.z > 0.0) {
+    vec2 gp = gl_FragCoord.xy + fract(uTime * vec2(7.13, 3.71)) * 311.0;
+    float grain = fract(sin(dot(gp, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+    col += grain * uFilm.z * (0.35 + col.g);
+  }
   fragColor = vec4(col, 1.0);
 }`,
 };
@@ -746,9 +795,11 @@ export class WebGL2Renderer {
         gl.viewport(0, 0, sw, sh);
         gl.disable(gl.BLEND);
 
-        const wM87 = sim.wM87, wGarg = sim.wGarg, wCyg = sim.wCyg;
+        const pal = config.PALETTES;
+        const [wM87, wGarg, wCyg] = [0, 1, 2].map(
+            (j) => sim.wM87 * pal[0][j] + sim.wGarg * pal[1][j] + sim.wCyg * pal[2][j]);
         const rIn = wM87 * 2.12 + wGarg * 2.20 + wCyg * 1.82;
-        const rOut = wM87 * 8.40 + wGarg * 8.20 + wCyg * 7.60;
+        const rOut = (wM87 * 8.40 + wGarg * 8.20 + wCyg * 7.60) * config.DISK_OUTER;
         const kerrSpin = wM87 * 0.08 + wGarg * 0.04 + wCyg * 0.22;
         const omegaBase = wCyg * 2.05 + (1 - wCyg) * 1.55;
 
@@ -778,6 +829,9 @@ export class WebGL2Renderer {
         gl.uniform3fv(b.u.uBhT2, sim.bhT2);
         gl.uniform1f(b.u.uMarchSteps, quality.marchSteps || config.BH_MARCH_STEPS);
         gl.uniform1f(b.u.uSoftClip, softClip);
+        gl.uniform2fv(b.u.uCenter, sim.center);
+        gl.uniform3f(b.u.uLook, config.DISK_GAIN, config.HAZE_GAIN, config.SKY_RICH);
+        gl.uniform2f(b.u.uSkyRot, Math.cos(sim.skyAngle), Math.sin(sim.skyAngle));
 
         gl.bindVertexArray(this.quadVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -806,6 +860,8 @@ export class WebGL2Renderer {
             gl.uniform3fv(d.u.uBhT2, sim.bhT2);
             gl.uniform2f(d.u.uNdcScale, (2 * minDim) / sw, (2 * minDim) / sh);
             gl.uniform1f(d.u.uPx, px);
+            gl.uniform2fv(d.u.uCenter, sim.center);
+            gl.uniform3f(d.u.uDust, config.DUST_GAIN, config.DUST_ARMS, config.DUST_SIZE);
             gl.drawArrays(gl.POINTS, 0, dustCount);
         }
 
@@ -875,6 +931,12 @@ export class WebGL2Renderer {
         gl.uniform1i(this.compProg.u.uBloom, 1);
         gl.uniform1f(this.compProg.u.uBloomStrength, levels > 0 ? config.BLOOM_STRENGTH / levels : 0);
         gl.uniform1f(this.compProg.u.uSoftClip, softClip);
+        const streak = levels > 0 ? this.bloom[Math.min(3, levels - 1)] : this.scene;
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, streak.tex);
+        gl.uniform1i(this.compProg.u.uStreakTex, 2);
+        gl.uniform3f(this.compProg.u.uFilm, levels > 0 ? config.STREAK : 0, 2.5 / streak.w, config.GRAIN);
+        gl.uniform1f(this.compProg.u.uTime, sim.time);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindVertexArray(null);
@@ -914,8 +976,8 @@ export class Canvas2DRenderer {
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(this.starLayer(w, h), 0, 0);
 
-        const cx = w * 0.5 + view.parallax.x * 10;
-        const cy = h * 0.5 - view.parallax.y * 8;
+        const cx = w * 0.5 + view.parallax.x * 10 + sim.center[0] * Math.min(w, h);
+        const cy = h * 0.5 - view.parallax.y * 8 - sim.center[1] * Math.min(w, h);
         const unit = (sim.cam.fov / sim.cam.dist) * Math.min(w, h); // px per world unit
         const rShadow = unit * 2.6;
 
