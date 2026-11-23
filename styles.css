@@ -360,6 +360,17 @@ h1 {
     }
 }
 
+/* Phones: one claim per line instead of a dot-separated pair. */
+@media (max-width: 600px) {
+    .claims a {
+        display: block;
+    }
+
+    .claims-sep {
+        display: none;
+    }
+}
+
 @media (min-width: 768px) {
     .buttons {
         flex-direction: row;
