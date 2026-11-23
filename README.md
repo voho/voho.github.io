@@ -21,21 +21,27 @@ A real-time general-relativistic Black Hole and particle absorption simulation r
 - `quality.js` — DOM-free `QualityGovernor`: trades render scale, then effects, for frame rate and probes back up with exponential backoff.
 - `script.js` — WebGL2 initialization, `webglcontextlost` fallback/recovery, `100lvh`-safe responsive sizing, pointer/hold particle streaming, device tilt parallax, link/button hover spacetime transitions, intro fly-in and idle camera drift, display-rate calibration with a ~60 fps cap, and `prefers-reduced-motion` handling.
 
-## Look blend
+## Look
 
-The scene rests on a cinematic look (`config.LOOKS.cinematic`): edge-on disk with the lensed arc over the shadow, anamorphic streak, film grain, breathing tilt. As the pointer moves off-centre (or the device tilts), `script.js` interpolates every setting toward `config.LOOKS.deepfield`: the camera pulls back, the hole slides to the side opposite the pointer, and a procedural galaxy band fades in and turns past it. Returning to the centre brings the cinematic view back.
+One cinematic look: an edge-on disk with the lensed arc over the shadow, centred behind the typography, with an anamorphic streak, film grain, a slowly breathing tilt and a faint galactic band turning in the sky. Its tunables sit in the "Cinematic Look" block of `config.js`.
+
+## CPU budget
+
+- The loop runs at half rate (~30 fps) after `2.5 s` without pointer, touch or hover input, and returns to full rate on the next input.
+- Device pixel ratio is capped at `1.25`.
+- Pointer moves are coalesced to one simulation update per frame.
+- No `backdrop-filter` over the canvas, which would force a re-blur every frame.
 
 ## Interaction
 
 - **Default resting state** — the cinematic edge-on view: shadow framed by the lensed arc of the disk, centred behind the typography.
-- **Move the pointer left or right** — the view drifts into the deep field with the hole on the opposite side; back at the centre it returns.
 - **Hover or focus links** — hovering **Founder at Protocodus** or **Meet me on LinkedIn** smoothly swings the disk face-on in amber; hovering **Co-Founder of Evangelist** or **Listen on Spotify** morphs into **Cygnus X-1** with sapphire X-ray plasma and bipolar jets, while stars remain stationary and orbiting particles adapt cleanly.
 - **Move, click, or hold cursor / touch** — emits streams and tidal bursts of matter that spiral inward and visibly redshift into oblivion as they cross the horizon.
 - **Tilt a phone** — shifts camera parallax gently without requesting extra sensor permissions.
 
 ## Graceful degradation & accessibility
 
-1. **WebGL2, full** — half-float HDR scene at up to `1.5` DPR, bloom, dust, 72 march steps. Weak or power-saving devices (few cores, little memory, coarse pointer, Save-Data) start at `0.7` render scale.
+1. **WebGL2, full** — half-float HDR scene at up to `1.25` DPR, bloom, dust, 72 march steps. Weak or power-saving devices (few cores, little memory, coarse pointer, Save-Data) start at `0.7` render scale.
 2. **Adaptive render scale** — the governor lowers the scene resolution down to `0.5` when frame rate drops and raises it again when there is headroom; the composite pass upscales.
 3. **Lite effects** — if minimum scale is still too slow: 44 march steps, no bloom, `5,000` dust grains, `500` particles.
 4. **8-bit targets** — without `EXT_color_buffer_float`/`half_float` the same pipeline runs range-compressed in RGBA8.

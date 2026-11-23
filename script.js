@@ -10,32 +10,6 @@ import { BlackHoleSimulation } from './simulation.js';
 import { WebGL2Renderer, Canvas2DRenderer } from './renderer.js';
 import { QualityGovernor } from './quality.js';
 
-// The scene rests on LOOKS.cinematic and drifts toward LOOKS.deepfield as
-// the pointer (or device tilt) moves off-centre, with the hole going to the
-// side opposite the pointer. lookBlend is signed: its sign is that side.
-const defaults = { ...config };
-const { cinematic, deepfield } = config.LOOKS;
-let lookBlend = 0;
-
-function mix(a, b, k) {
-    if (typeof a === 'number') return a + (b - a) * k;
-    if (Array.isArray(a)) return a.map((v, i) => mix(v, b[i], k));
-    if (a && typeof a === 'object') {
-        return Object.fromEntries(Object.keys(a).map((key) => [key, mix(a[key], b[key], k)]));
-    }
-    return a;
-}
-
-function applyLook() {
-    const k = Math.abs(lookBlend);
-    for (const key of Object.keys({ ...cinematic, ...deepfield })) {
-        config[key] = mix(cinematic[key] ?? defaults[key], deepfield[key] ?? defaults[key], k);
-    }
-    config.CENTER[0] *= Math.sign(lookBlend);
-    // Camera distance and hole position are read on resize.
-    if (sim) sim.resize(view.w, view.h);
-}
-
 const root = document.documentElement;
 const glCanvas = document.getElementById('bg-gl');
 const c2dCanvas = document.getElementById('bg-2d');
@@ -132,6 +106,7 @@ const rafTimes = [];
 let frameEvery = 1;
 let targetFps = 60;
 let rafCount = 0;
+let lastInput = performance.now(); // the intro counts as activity
 let last = 0;
 
 function calibrate(now) {
@@ -150,7 +125,10 @@ function frame(now) {
         calibrate(now);
         return;
     }
-    if (++rafCount % frameEvery) return;
+    const idle = now - lastInput > config.IDLE_AFTER_MS;
+    const every = idle ? frameEvery * 2 : frameEvery;
+    const fps = targetFps * frameEvery / every;
+    if (++rafCount % every) return;
 
     const rawDt = (now - last) / 1000;
     const dt = Math.min(rawDt, 0.05);
@@ -164,20 +142,21 @@ function frame(now) {
     view.parallax.x += (view.parallax.tx - view.parallax.x) * parEase;
     view.parallax.y += (view.parallax.ty - view.parallax.y) * parEase;
 
-    // parallax.tx is +1 with the pointer at the left edge. A dead zone keeps
-    // the cinematic view while the pointer is near the text.
-    const off = Math.abs(view.parallax.tx);
-    const reach = Math.max(0, Math.min(1, (off - config.LOOK_DEAD_ZONE) / (config.LOOK_FULL_AT - config.LOOK_DEAD_ZONE)));
-    const target = Math.sign(view.parallax.tx) * reach * reach * (3 - 2 * reach);
-    lookBlend += (target - lookBlend) * Math.min(1, config.LOOK_EASE * dt);
-    applyLook();
-    // Dust count follows both the governor's level and the look blend.
-    quality = governor.settings;
+    // Pointer events can outnumber frames several times over; matter is
+    // emitted once per frame from the net movement.
+    if (pointerMoved) {
+        pointerMoved = false;
+        sim.pointerMove(view.pointer.x, view.pointer.y,
+            view.pointer.x - prevNormX, view.pointer.y - prevNormY, sim.pointer.down);
+        prevNormX = view.pointer.x;
+        prevNormY = view.pointer.y;
+    }
+
     camOffset.x = view.parallax.x + config.DRIFT_X * Math.sin(sim.time * 0.11);
     camOffset.y = view.parallax.y + config.DRIFT_Y * Math.sin(sim.time * 0.077 + 1.3);
     sim.update(dt, quality, camOffset);
     renderOnce();
-    if (useWebGL) governor.sample(rawDt, targetFps);
+    if (useWebGL && governor.sample(rawDt, fps)) quality = governor.settings;
 }
 
 function startLoop() {
@@ -194,26 +173,21 @@ function stopLoop() {
 // --- Input ------------------------------------------------------------------
 
 let touchDragging = false;
+let pointerMoved = false;
 let prevNormX = 0.5;
 let prevNormY = 0.5;
 
 function aimPointer(clientX, clientY) {
     const nx = Math.max(0, Math.min(1, clientX / Math.max(1, view.w)));
     const ny = Math.max(0, Math.min(1, clientY / Math.max(1, view.h)));
-    const vx = nx - prevNormX;
-    const vy = ny - prevNormY;
-    prevNormX = nx;
-    prevNormY = ny;
-
+    lastInput = performance.now();
     view.pointer.x = nx;
     view.pointer.y = ny;
     view.pointer.targetStrength = 1;
     view.parallax.tx = (0.5 - nx) * 2;
     view.parallax.ty = (ny - 0.5) * 2;
 
-    if (sim && !reducedMotion.matches) {
-        sim.pointerMove(nx, ny, vx, vy, sim.pointer.down);
-    }
+    pointerMoved = true;
 }
 
 const resetPointer = () => {
@@ -243,6 +217,7 @@ window.addEventListener('touchcancel', resetPointer, { passive: true });
 
 window.addEventListener('pointerdown', (ev) => {
     dismissHint();
+    lastInput = performance.now();
     if (reducedMotion.matches || !sim) return;
     if (ev.target && ev.target.closest && ev.target.closest('a, button')) return;
     sim.pointer.down = true;
@@ -289,6 +264,7 @@ for (const el of document.querySelectorAll('[data-mood]')) {
     const mood = Number(el.dataset.mood || 0);
     const onEnter = (ev) => {
         if (!sim || reducedMotion.matches) return;
+        lastInput = performance.now();
         sim.targetMood = mood;
         const now = performance.now();
         if (now - lastButtonPulse < config.BUTTON_PULSE_COOLDOWN_MS) return;
@@ -300,6 +276,7 @@ for (const el of document.querySelectorAll('[data-mood]')) {
     };
 
     const onLeave = () => {
+        lastInput = performance.now();
         if (sim && sim.targetMood === mood) sim.targetMood = 0;
     };
 
@@ -379,7 +356,6 @@ function reveal() {
 c2dRenderer = new Canvas2DRenderer(c2dCanvas);
 glRenderer = new WebGL2Renderer(glCanvas);
 fitCanvases();
-applyLook();
 sim = new BlackHoleSimulation(view.w, view.h);
 const glReady = glRenderer.init(sim);
 setBackend(glReady);

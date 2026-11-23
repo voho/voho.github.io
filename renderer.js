@@ -38,8 +38,7 @@ uniform vec3 uBhN;
 uniform vec3 uBhT2;
 uniform float uMarchSteps;
 uniform float uSoftClip;  // 0.42 on 8-bit targets (range compression), 0 on half-float
-uniform vec2 uCenter;
-uniform vec3 uLook;       // x=disk gain, y=haze gain, z=rich sky
+uniform vec2 uLook;       // x=haze gain, y=galactic band gain
 uniform vec2 uSkyRot;     // cos, sin of the sky's turn about the vertical axis
 
 vec3 toBhLocal(vec3 p) {
@@ -143,7 +142,7 @@ vec3 sampleLensedSky(vec3 dir) {
   base += uNebTint * (neb * neb2 * band * 0.30);
   base += tint1 * s1.x * 1.50 + vec3(0.82, 0.90, 1.0) * s2 * 0.60;
 
-  if (uLook.z > 0.0) {
+  if (uLook.y > 0.0) {
     // Galactic band around the plane with normal g, brightest toward e1.
     // Noise runs on a linear projection of the direction, so it has no seam.
     const vec3 g = vec3(0.3306, 0.9418, 0.0601);
@@ -153,17 +152,15 @@ vec3 sampleLensedSky(vec3 dir) {
     vec2 p = vec2(dot(dir, e1), dot(dir, e2)) * 2.6 + lat * vec2(1.9, -2.3);
     float warp = fbm4(p * 1.3 + 4.0);
     float clouds = fbm4(p * 2.2 + warp * 1.4);
-    float lanes = fbm4(p * 4.6 - warp * 2.0 + 9.0);
     float glowBand = exp(-lat * lat * 9.0);
     float ridge = exp(-lat * lat * 55.0);
     float bulge = exp(-(1.0 - dot(dir, e1)) * 3.0);
     float dens = glowBand * (0.10 + 1.5 * clouds * clouds * clouds) + ridge * (0.30 + 1.2 * bulge);
-    dens *= 1.0 - 0.60 * smoothstep(0.40, 0.66, lanes) * exp(-lat * lat * 26.0);
     vec3 glow = mix(vec3(0.14, 0.22, 0.52), vec3(1.00, 0.70, 0.42), bulge * (0.4 + 0.6 * ridge));
-    base += glow * dens * (0.24 * uLook.z);
-    base += vec3(0.60, 0.13, 0.24) * smoothstep(0.42, 0.72, clouds * glowBand + warp * 0.22) * (0.26 * uLook.z);
+    base += glow * dens * (0.24 * uLook.y);
+    base += vec3(0.60, 0.13, 0.24) * smoothstep(0.42, 0.72, clouds * glowBand + warp * 0.22) * (0.26 * uLook.y);
     vec2 s3 = starGridCol(dir, 205.0, 0.90 - 0.30 * glowBand);
-    base += mix(vec3(0.75, 0.86, 1.0), vec3(1.0, 0.90, 0.76), s3.y) * s3.x * (0.85 * uLook.z);
+    base += mix(vec3(0.75, 0.86, 1.0), vec3(1.0, 0.90, 0.76), s3.y) * s3.x * (0.85 * uLook.y);
   }
   return base;
 }
@@ -221,14 +218,14 @@ vec4 evalDisk(vec3 locP, vec3 locRayDir, vec3 w, float absorb) {
             + plasmaCygnus(temp) * w.z;
 
   float density = innerFade * outerFade * structure;
-  float intensity = density * beam * (0.55 + iscoBoost * 1.75 + absorb * iscoBoost * 0.60);
+  float intensity = density * beam * (0.80 + iscoBoost * 2.20 + absorb * iscoBoost * 0.60);
   float alpha = clamp(innerFade * outerFade * (0.34 + 0.56 * streaks), 0.0, 0.94);
   return vec4(dCol * intensity, alpha);
 }
 
 void main() {
   float minDim = max(1.0, min(uRes.x, uRes.y));
-  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / minDim - uCenter;
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / minDim;
 
   vec3 pos = uCamPos;
   vec3 vel = normalize(uv.x * uCamU + uv.y * uCamV + uFov * uCamW);
@@ -319,7 +316,7 @@ void main() {
       vec3 hitP = mix(prevPos, pos, frac);
       vec4 disk = evalDisk(toBhLocal(hitP), toBhLocal(vel), uWeights, uAbsorb);
       if (disk.a > 0.002) {
-        accum += disk.rgb * (trans * disk.a * uLook.x);
+        accum += disk.rgb * trans * disk.a;
         trans *= (1.0 - disk.a * 0.86);
         if (trans < 0.02) break;
       }
@@ -329,7 +326,7 @@ void main() {
     // when seen edge-on at the cost of a few multiplies per step.
     if (r < uBhParams.y) {
       float hz = max(0.0, 1.0 - abs(hCurr) * 1.5);
-      accum += uRingTint * (hz * hz * invR2 * smoothstep(uBhParams.x - 0.2, uBhParams.x + 0.7, r) * 0.42 * uLook.y * dt * trans);
+      accum += uRingTint * (hz * hz * invR2 * smoothstep(uBhParams.x - 0.2, uBhParams.x + 0.7, r) * 0.42 * uLook.x * dt * trans);
     }
 
     if (uWeights.z > 0.01) {
@@ -425,7 +422,6 @@ uniform vec3 uBhT1;
 uniform vec3 uBhN;
 uniform vec3 uBhT2;
 uniform vec2 uNdcScale;
-uniform vec2 uCenter;
 uniform float uPx;
 out vec4 vColor;
 
@@ -489,7 +485,7 @@ void main() {
   // Grains thinner than a pixel keep their energy by dimming instead.
   float alpha = occ * fade * twinkle * beam * (0.10 + 0.34 * heat) * min(1.0, px * px);
 
-  gl_Position = vec4((a * lens + uCenter) * uNdcScale, 0.0, 1.0);
+  gl_Position = vec4(a * lens * uNdcScale, 0.0, 1.0);
   gl_PointSize = max(1.0, px * 2.4);
   vColor = vec4(mix(warm, cyg, uCyg), alpha);
 }`,
@@ -655,6 +651,7 @@ export class WebGL2Renderer {
         this.gl = null;
         this.ready = false;
         this.hdr = false;
+        this.paletteWeights = [0, 0, 0];
         this.scene = null;
         this.bloom = [];
         this.quadVao = null;
@@ -791,11 +788,16 @@ export class WebGL2Renderer {
         gl.viewport(0, 0, sw, sh);
         gl.disable(gl.BLEND);
 
-        const pal = config.PALETTES;
-        const [wM87, wGarg, wCyg] = [0, 1, 2].map(
-            (j) => sim.wM87 * pal[0][j] + sim.wGarg * pal[1][j] + sim.wCyg * pal[2][j]);
+        // Shader weights are per palette (amber, gold-white, sapphire); the
+        // simulation's are per variant.
+        const pw = this.paletteWeights;
+        pw[0] = pw[1] = pw[2] = 0;
+        pw[config.VARIANTS[0].palette] += sim.wM87;
+        pw[config.VARIANTS[1].palette] += sim.wGarg;
+        pw[config.VARIANTS[2].palette] += sim.wCyg;
+        const wM87 = pw[0], wGarg = pw[1], wCyg = pw[2];
         const rIn = wM87 * 2.12 + wGarg * 2.20 + wCyg * 1.82;
-        const rOut = (wM87 * 8.40 + wGarg * 8.20 + wCyg * 7.60) * config.DISK_OUTER;
+        const rOut = wM87 * 8.40 + wGarg * 8.20 + wCyg * 7.60;
         const kerrSpin = wM87 * 0.08 + wGarg * 0.04 + wCyg * 0.22;
         const omegaBase = wCyg * 2.05 + (1 - wCyg) * 1.55;
 
@@ -825,8 +827,7 @@ export class WebGL2Renderer {
         gl.uniform3fv(b.u.uBhT2, sim.bhT2);
         gl.uniform1f(b.u.uMarchSteps, quality.marchSteps || config.BH_MARCH_STEPS);
         gl.uniform1f(b.u.uSoftClip, softClip);
-        gl.uniform2fv(b.u.uCenter, sim.center);
-        gl.uniform3f(b.u.uLook, config.DISK_GAIN, config.HAZE_GAIN, config.SKY_RICH);
+        gl.uniform2f(b.u.uLook, config.HAZE_GAIN, config.SKY_GAIN);
         gl.uniform2f(b.u.uSkyRot, Math.cos(sim.skyAngle), Math.sin(sim.skyAngle));
 
         gl.bindVertexArray(this.quadVao);
@@ -856,7 +857,6 @@ export class WebGL2Renderer {
             gl.uniform3fv(d.u.uBhT2, sim.bhT2);
             gl.uniform2f(d.u.uNdcScale, (2 * minDim) / sw, (2 * minDim) / sh);
             gl.uniform1f(d.u.uPx, px);
-            gl.uniform2fv(d.u.uCenter, sim.center);
             gl.drawArrays(gl.POINTS, 0, dustCount);
         }
 
@@ -971,8 +971,8 @@ export class Canvas2DRenderer {
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(this.starLayer(w, h), 0, 0);
 
-        const cx = w * 0.5 + view.parallax.x * 10 + sim.center[0] * Math.min(w, h);
-        const cy = h * 0.5 - view.parallax.y * 8 - sim.center[1] * Math.min(w, h);
+        const cx = w * 0.5 + view.parallax.x * 10;
+        const cy = h * 0.5 - view.parallax.y * 8;
         const unit = (sim.cam.fov / sim.cam.dist) * Math.min(w, h); // px per world unit
         const rShadow = unit * 2.6;
 
