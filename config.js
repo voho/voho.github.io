@@ -36,7 +36,8 @@ export const config = {
     ],
 
     // --- Look (overridden per preview look, see LOOKS below) ----------------
-    PALETTES: [0, 1, 2],      // disk palette of each variant: 0 amber, 1 gold-white, 2 sapphire
+    // Row i: how much variant i draws from each disk palette (amber, gold-white, sapphire).
+    PALETTES: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
     CENTER: [0, 0],           // where the hole sits, in min-dimension units from screen centre
     NARROW_CENTER: [0, 0],
     DISK_GAIN: 1,
@@ -48,7 +49,7 @@ export const config = {
     DUST_GAIN: 1,
     DUST_ARMS: 0,             // 1 gathers the grains into spiral arms
     DUST_SIZE: 1,
-    ORBIT_RATE: 0,            // steady camera orbit, parallax units per second
+    ORBIT_RATE: 0,            // the sky turning past the hole as if orbiting it, rad/s
     TILT_BREATH: 0,           // slow oscillation of the disk tilt, radians
 
     // --- Camera & Framing ----------------------------------------------------
@@ -110,7 +111,7 @@ export const config = {
                 { id: 1, name: 'M87* Horizon', tilt: 1.15, roll: 0.06, spin: 0.22, gm: 5.2, drag: 0.18 },
                 { id: 2, name: 'Cygnus X-1', tilt: 0.34, roll: 0.24, spin: 0.52, gm: 5.5, drag: 0.20 },
             ],
-            PALETTES: [1, 0, 2],
+            PALETTES: [[0, 1, 0], [1, 0, 0], [0, 0, 1]],
             CAM_DIST: 19,
             NARROW_CAM_DIST: 20.5,
             HAZE_GAIN: 2.6,
@@ -135,8 +136,13 @@ export const config = {
             SKY_RICH: 1,
             DISK_OUTER: 0.6,
             DUST_COUNT: 6000,
-            ORBIT_RATE: 0.12,
+            ORBIT_RATE: 0.012,
             INTRO_PULLBACK: 0.25,
+        },
+        // Drifts from one look into another and back on a slow loop; every
+        // setting the two differ in is interpolated (seconds).
+        journey: {
+            JOURNEY: { from: 'cinematic', to: 'deepfield', hold: 24, travel: 30 },
         },
         // The disk itself made of GPU grains, with only a faint gas glow under it.
         particles: {

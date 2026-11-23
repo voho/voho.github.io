@@ -27,6 +27,7 @@ Three alternative looks are selectable with a query parameter; without it the pa
 
 - `?look=cinematic` — edge-on disk with the lensed arc over the shadow, anamorphic streak, film grain, breathing tilt.
 - `?look=deepfield` — a small, distant hole placed beside the text, bending a procedural galaxy band while the camera slowly orbits.
+- `?look=journey` — drifts from cinematic into deepfield and back on a slow loop (24 s hold, 30 s travel), interpolating every setting the two differ in.
 - `?look=particles` — the disk made of 160,000 GPU grains gathered into spiral arms over a faint gas glow.
 
 ## Interaction

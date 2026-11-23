@@ -14,6 +14,7 @@ export class BlackHoleSimulation {
         this.height = 1;
         this.time = 0;
         this.igniteT = 0;
+        this.skyAngle = 0;
         this.dolly = 0; // 1 = pulled back for the intro fly-in, eases to 0
         this.absorbGlow = 0;
         this.targetMood = 0;
@@ -478,6 +479,7 @@ export class BlackHoleSimulation {
         this.igniteT += clampedDt;
         this.absorbGlow *= Math.exp(-clampedDt * 2.4);
         this.dolly *= Math.exp(-clampedDt * config.INTRO_EASE);
+        this.skyAngle += clampedDt * config.ORBIT_RATE;
 
         if (this.pointer.down) {
             this._emitAccum += clampedDt * config.HOLD_EMIT_RATE;

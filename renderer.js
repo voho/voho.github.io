@@ -40,6 +40,7 @@ uniform float uMarchSteps;
 uniform float uSoftClip;  // 0.42 on 8-bit targets (range compression), 0 on half-float
 uniform vec2 uCenter;
 uniform vec3 uLook;       // x=disk gain, y=haze gain, z=rich sky
+uniform vec2 uSkyRot;     // cos, sin of the sky's turn about the vertical axis
 
 vec3 toBhLocal(vec3 p) {
   return vec3(dot(p, uBhT1), dot(p, uBhN), dot(p, uBhT2));
@@ -128,6 +129,7 @@ vec2 starGridCol(vec3 dir, float scale, float thresh) {
 }
 
 vec3 sampleLensedSky(vec3 dir) {
+  dir.xz = vec2(dir.x * uSkyRot.x - dir.z * uSkyRot.y, dir.x * uSkyRot.y + dir.z * uSkyRot.x);
   vec2 s1 = starGridCol(dir, 58.0, 0.945);
   float s2 = starGridCol(dir, 118.0, 0.962).x;
   vec3 tint1 = mix(vec3(0.66, 0.82, 1.0), vec3(1.0, 0.88, 0.72), s1.y);
@@ -158,10 +160,10 @@ vec3 sampleLensedSky(vec3 dir) {
     float dens = glowBand * (0.10 + 1.5 * clouds * clouds * clouds) + ridge * (0.30 + 1.2 * bulge);
     dens *= 1.0 - 0.60 * smoothstep(0.40, 0.66, lanes) * exp(-lat * lat * 26.0);
     vec3 glow = mix(vec3(0.14, 0.22, 0.52), vec3(1.00, 0.70, 0.42), bulge * (0.4 + 0.6 * ridge));
-    base += glow * dens * 0.24;
-    base += vec3(0.60, 0.13, 0.24) * smoothstep(0.42, 0.72, clouds * glowBand + warp * 0.22) * 0.26;
+    base += glow * dens * (0.24 * uLook.z);
+    base += vec3(0.60, 0.13, 0.24) * smoothstep(0.42, 0.72, clouds * glowBand + warp * 0.22) * (0.26 * uLook.z);
     vec2 s3 = starGridCol(dir, 205.0, 0.90 - 0.30 * glowBand);
-    base += mix(vec3(0.75, 0.86, 1.0), vec3(1.0, 0.90, 0.76), s3.y) * s3.x * 0.85;
+    base += mix(vec3(0.75, 0.86, 1.0), vec3(1.0, 0.90, 0.76), s3.y) * s3.x * (0.85 * uLook.z);
   }
   return base;
 }
@@ -793,11 +795,9 @@ export class WebGL2Renderer {
         gl.viewport(0, 0, sw, sh);
         gl.disable(gl.BLEND);
 
-        const w = [0, 0, 0];
-        w[config.PALETTES[0]] += sim.wM87;
-        w[config.PALETTES[1]] += sim.wGarg;
-        w[config.PALETTES[2]] += sim.wCyg;
-        const [wM87, wGarg, wCyg] = w;
+        const pal = config.PALETTES;
+        const [wM87, wGarg, wCyg] = [0, 1, 2].map(
+            (j) => sim.wM87 * pal[0][j] + sim.wGarg * pal[1][j] + sim.wCyg * pal[2][j]);
         const rIn = wM87 * 2.12 + wGarg * 2.20 + wCyg * 1.82;
         const rOut = (wM87 * 8.40 + wGarg * 8.20 + wCyg * 7.60) * config.DISK_OUTER;
         const kerrSpin = wM87 * 0.08 + wGarg * 0.04 + wCyg * 0.22;
@@ -831,6 +831,7 @@ export class WebGL2Renderer {
         gl.uniform1f(b.u.uSoftClip, softClip);
         gl.uniform2fv(b.u.uCenter, sim.center);
         gl.uniform3f(b.u.uLook, config.DISK_GAIN, config.HAZE_GAIN, config.SKY_RICH);
+        gl.uniform2f(b.u.uSkyRot, Math.cos(sim.skyAngle), Math.sin(sim.skyAngle));
 
         gl.bindVertexArray(this.quadVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
