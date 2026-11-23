@@ -10,17 +10,12 @@ import { BlackHoleSimulation } from './simulation.js';
 import { WebGL2Renderer, Canvas2DRenderer } from './renderer.js';
 import { QualityGovernor } from './quality.js';
 
-// Preview switch for alternative looks: index.html?look=<name>.
+// The scene rests on LOOKS.cinematic and drifts toward LOOKS.deepfield as
+// the pointer (or device tilt) moves off-centre, with the hole going to the
+// side opposite the pointer. lookBlend is signed: its sign is that side.
 const defaults = { ...config };
-const look = config.LOOKS[new URLSearchParams(location.search).get('look')];
-if (look) Object.assign(config, look);
-
-// A journey look drifts between two other looks: 0 = from, 1 = to.
-const journey = config.JOURNEY && {
-    ...config.JOURNEY,
-    from: config.LOOKS[config.JOURNEY.from],
-    to: config.LOOKS[config.JOURNEY.to],
-};
+const { cinematic, deepfield } = config.LOOKS;
+let lookBlend = 0;
 
 function mix(a, b, k) {
     if (typeof a === 'number') return a + (b - a) * k;
@@ -31,15 +26,12 @@ function mix(a, b, k) {
     return a;
 }
 
-function applyJourney(time) {
-    const { from, to, hold, travel } = journey;
-    const t = time % (2 * (hold + travel));
-    const ramp = (start) => Math.max(0, Math.min(1, (t - start) / travel));
-    const k = ramp(hold) - ramp(2 * hold + travel);
-    const eased = k * k * (3 - 2 * k);
-    for (const key of Object.keys({ ...from, ...to })) {
-        config[key] = mix(from[key] ?? defaults[key], to[key] ?? defaults[key], eased);
+function applyLook() {
+    const k = Math.abs(lookBlend);
+    for (const key of Object.keys({ ...cinematic, ...deepfield })) {
+        config[key] = mix(cinematic[key] ?? defaults[key], deepfield[key] ?? defaults[key], k);
     }
+    config.CENTER[0] *= Math.sign(lookBlend);
     // Camera distance and hole position are read on resize.
     if (sim) sim.resize(view.w, view.h);
 }
@@ -172,8 +164,14 @@ function frame(now) {
     view.parallax.x += (view.parallax.tx - view.parallax.x) * parEase;
     view.parallax.y += (view.parallax.ty - view.parallax.y) * parEase;
 
-    if (journey) applyJourney(sim.time);
-    // Dust count follows both the governor's level and a journey's blend.
+    // parallax.tx is +1 with the pointer at the left edge. A dead zone keeps
+    // the cinematic view while the pointer is near the text.
+    const off = Math.abs(view.parallax.tx);
+    const reach = Math.max(0, Math.min(1, (off - config.LOOK_DEAD_ZONE) / (config.LOOK_FULL_AT - config.LOOK_DEAD_ZONE)));
+    const target = Math.sign(view.parallax.tx) * reach * reach * (3 - 2 * reach);
+    lookBlend += (target - lookBlend) * Math.min(1, config.LOOK_EASE * dt);
+    applyLook();
+    // Dust count follows both the governor's level and the look blend.
     quality = governor.settings;
     camOffset.x = view.parallax.x + config.DRIFT_X * Math.sin(sim.time * 0.11);
     camOffset.y = view.parallax.y + config.DRIFT_Y * Math.sin(sim.time * 0.077 + 1.3);
@@ -381,7 +379,7 @@ function reveal() {
 c2dRenderer = new Canvas2DRenderer(c2dCanvas);
 glRenderer = new WebGL2Renderer(glCanvas);
 fitCanvases();
-if (journey) applyJourney(0);
+applyLook();
 sim = new BlackHoleSimulation(view.w, view.h);
 const glReady = glRenderer.init(sim);
 setBackend(glReady);
