@@ -1,7 +1,8 @@
 // renderer.js
-// WebGL2 geodesic ray-tracing Black Hole renderer + quarter-res separable HDR
-// bloom + compacted active particle draw + Canvas 2D fallback driven from
-// the same BlackHoleSimulation state.
+// WebGL2 geodesic ray-tracing Black Hole renderer (half-float HDR scene at a
+// dynamic render scale, flow-noise accretion disk, stateless GPU dust,
+// mip-chain bloom, filmic composite) + Canvas 2D fallback driven from the
+// same BlackHoleSimulation state.
 
 import { config } from './config.js';
 
@@ -36,6 +37,7 @@ uniform vec3 uBhT1;
 uniform vec3 uBhN;
 uniform vec3 uBhT2;
 uniform float uMarchSteps;
+uniform float uSoftClip;  // 0.42 on 8-bit targets (range compression), 0 on half-float
 
 vec3 toBhLocal(vec3 p) {
   return vec3(dot(p, uBhT1), dot(p, uBhN), dot(p, uBhT2));
@@ -67,11 +69,11 @@ float fbm2(vec2 p) {
   return v + 0.25 * noise2(rot * p * 2.03 + vec2(11.7, 6.3));
 }
 
-float fbm3(vec2 p) {
+float fbm4(vec2 p) {
   float v = 0.0;
   float a = 0.5;
   mat2 rot = mat2(0.80, -0.60, 0.60, 0.80);
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     v += a * noise2(p);
     p = rot * p * 2.03 + vec2(11.7, 6.3);
     a *= 0.5;
@@ -119,7 +121,8 @@ vec2 starGridCol(vec3 dir, float scale, float thresh) {
   vec3 r = hash33(id);
   if (r.x <= thresh) return vec2(0.0, r.y);
   vec3 d = f - (r - 0.5) * 0.44;
-  return vec2(exp(-dot(d, d) * 52.0) * smoothstep(thresh, 1.0, r.x), r.y);
+  float twinkle = 0.80 + 0.20 * sin(uTime * (0.6 + r.z * 2.4) + r.y * 40.0);
+  return vec2(exp(-dot(d, d) * 110.0) * smoothstep(thresh, 1.0, r.x) * twinkle, r.y);
 }
 
 vec3 sampleLensedSky(vec3 dir) {
@@ -134,8 +137,16 @@ vec3 sampleLensedSky(vec3 dir) {
 
   vec3 base = vec3(0.009, 0.013, 0.028);
   base += uNebTint * (neb * neb2 * band * 0.30);
-  base += tint1 * s1.x * 1.15 + vec3(0.82, 0.90, 1.0) * s2 * 0.52;
+  base += tint1 * s1.x * 1.50 + vec3(0.82, 0.90, 1.0) * s2 * 0.60;
   return base;
+}
+
+// One flow layer: the disk plane wound up by 'wind' seconds of differential
+// Keplerian rotation, which shears isotropic noise into orbital streaks.
+float diskLayer(vec2 p, float omega, float wind, vec2 seed) {
+  float a = -omega * wind;
+  float c = cos(a), s = sin(a);
+  return fbm4(vec2(p.x * c - p.y * s, p.x * s + p.y * c) * 0.80 + seed);
 }
 
 vec4 evalDisk(vec3 locP, vec3 locRayDir, vec3 w, float absorb) {
@@ -144,21 +155,25 @@ vec4 evalDisk(vec3 locP, vec3 locRayDir, vec3 w, float absorb) {
   float rOut = uBhParams.y;
   if (rad < rIn || rad > rOut) return vec4(0.0);
 
-  // Differential Keplerian shear locked to orbital velocity (-locP.z, 0, locP.x)
-  float omega = uBhParams.w / (rad * sqrt(rad));
-  float rotAng = -uTime * omega * 0.42;
-  float ca = cos(rotAng), sa = sin(rotAng);
-  vec2 rXZ = vec2(locP.x * ca - locP.z * sa, locP.x * sa + locP.z * ca);
+  // Differential rotation would wind the pattern ever tighter, so two layers
+  // run half a cycle apart and cross-fade (flow-map style): each restarts,
+  // reseeded, while its weight is zero.
+  float omega = 0.42 * uBhParams.w / (rad * sqrt(rad));
+  float cyc = uTime / 26.0;
+  float f0 = fract(cyc), f1 = fract(cyc + 0.5);
+  float w1 = abs(2.0 * f0 - 1.0);
+  float n0 = diskLayer(locP.xz, omega, 10.0 + f0 * 26.0, floor(cyc) * vec2(7.1, 3.3));
+  float n1 = diskLayer(locP.xz, omega, 10.0 + f1 * 26.0, floor(cyc + 0.5) * vec2(4.7, 9.2) + 17.3);
+  // Averaging two uncorrelated layers flattens contrast; restore it.
+  float n = 0.47 + (mix(n0, n1, w1) - 0.47) * inversesqrt(w1 * w1 + (1.0 - w1) * (1.0 - w1));
 
-  float n1 = fbm3(rXZ * 0.68 + vec2(sin(rad * 1.4), cos(rad * 1.4)) * 0.45);
-  float n2 = fbm2(rXZ * 1.45 - vec2(0.0, uTime * 0.05));
-  float armAngle = atan(rXZ.y, rXZ.x);
-  float rings = 0.55 + 0.45 * sin(rad * 4.8 - n1 * 4.2 + armAngle * (2.0 + w.x));
-  float streaks = smoothstep(0.18, 0.85, n1 * 0.72 + n2 * 0.45);
-  float structure = streaks * (0.45 + 0.55 * rings);
+  float streaks = smoothstep(0.26, 0.72, n);
+  float fil = 1.0 - min(1.0, abs(n - 0.50) * 6.0);
+  float gaps = 0.92 + 0.08 * sin(rad * 5.0 + n * 7.0);
+  float structure = (0.16 + 0.84 * streaks + 0.26 * fil * fil) * gaps;
 
-  float innerFade = smoothstep(rIn, rIn + 0.72, rad);
-  float outerFade = 1.0 - smoothstep(rOut * 0.46, rOut, rad);
+  float innerFade = smoothstep(rIn, rIn + 0.55, rad);
+  float outerFade = 1.0 - smoothstep(rOut * 0.42, rOut, rad);
   float iscoBoost = exp(-(rad - rIn) * 0.65);
 
   vec3 vOrb = normalize(vec3(-locP.z, 0.0, locP.x));
@@ -172,15 +187,15 @@ vec4 evalDisk(vec3 locP, vec3 locRayDir, vec3 w, float absorb) {
   float beamMin = w.x * 0.24 + (1.0 - w.x) * 0.36;
   float beamMax = w.x * 2.95 + (1.0 - w.x) * 2.65;
   float beam = clamp(pow(gTot, beamExp), beamMin, beamMax);
-  float temp = (0.38 + 0.56 * iscoBoost + streaks * 0.24) * clamp(gTot, 0.52, 1.38) + absorb * iscoBoost * 0.28;
+  float temp = (0.30 + 0.66 * iscoBoost + streaks * 0.22) * clamp(gTot, 0.52, 1.38) + absorb * iscoBoost * 0.28;
 
   vec3 dCol = plasmaM87(temp) * w.x
             + blackbodyGargantua(temp) * w.y
             + plasmaCygnus(temp) * w.z;
 
-  float density = innerFade * outerFade * (0.46 + 0.54 * structure);
-  float intensity = density * beam * (1.28 + iscoBoost * 1.15 + absorb * iscoBoost * 0.50);
-  float alpha = clamp(density * (0.60 + 0.40 * outerFade), 0.0, 0.94);
+  float density = innerFade * outerFade * structure;
+  float intensity = density * beam * (0.55 + iscoBoost * 1.75 + absorb * iscoBoost * 0.60);
+  float alpha = clamp(innerFade * outerFade * (0.34 + 0.56 * streaks), 0.0, 0.94);
   return vec4(dCol * intensity, alpha);
 }
 
@@ -207,7 +222,7 @@ void main() {
     vec3 dirOut = normalize(vel - (closest / bLen) * defl);
     vec3 sky = sampleLensedSky(dirOut);
     float luma = dot(sky, vec3(0.2126, 0.7152, 0.0722));
-    fragColor = vec4(sky / (1.0 + luma * 0.42), 1.0);
+    fragColor = vec4(sky / (1.0 + luma * uSoftClip), 1.0);
     return;
   }
 
@@ -240,7 +255,10 @@ void main() {
     float r = r2 * invR;
     minR = min(minR, r);
 
-    if (r < rs * 1.005) {
+    // Nothing that crosses the photon sphere (1.5 rs) inward comes back, so
+    // the ray is settled there; marching on to the horizon would spend the
+    // step budget where steps are smallest.
+    if (r < rs * 1.48) {
       captured = true;
       break;
     }
@@ -280,6 +298,13 @@ void main() {
       }
     }
 
+    // Thin glowing gas layer hugging the disk plane: gives the disk volume
+    // when seen edge-on at the cost of a few multiplies per step.
+    if (r < uBhParams.y) {
+      float hz = max(0.0, 1.0 - abs(hCurr) * 1.5);
+      accum += uRingTint * (hz * hz * invR2 * smoothstep(uBhParams.x - 0.2, uBhParams.x + 0.7, r) * 0.42 * dt * trans);
+    }
+
     if (uWeights.z > 0.01) {
       vec3 locJ = toBhLocal(pos);
       float yAbs = abs(locJ.y);
@@ -302,12 +327,10 @@ void main() {
   if (!captured) {
     accum += sampleLensedSky(vel) * trans;
     accum += uRingTint * photonRing * (0.46 + uAbsorb * 0.55);
-  } else {
-    accum += uRingTint * pow(photonRing, 2.2) * (0.16 + uAbsorb * 0.30) * trans;
   }
 
   float luma = dot(accum, vec3(0.2126, 0.7152, 0.0722));
-  vec3 hdr = accum / (1.0 + luma * 0.42);
+  vec3 hdr = accum / (1.0 + luma * uSoftClip);
   fragColor = vec4(hdr, 1.0);
 }`,
 
@@ -356,31 +379,137 @@ void main() {
   fragColor = vec4(vColor.rgb * a, a);
 }`,
 
-    BRIGHT_FS: `#version 300 es
+    // Stateless GPU dust: every grain's spiral-in orbit is a closed-form
+    // function of its vertex id and time, so tens of thousands of grains cost
+    // no CPU and no buffers. Projection and point-mass lensing mirror
+    // BlackHoleSimulation.stepParticles.
+    DUST_VS: `#version 300 es
 precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-uniform sampler2D uScene;
+uniform float uTime;
+uniform vec4 uBhParams;  // x=rIn, y=rOut, w=omegaBase
+uniform float uCyg;
+uniform vec3 uCamPos;
+uniform vec3 uCamU;
+uniform vec3 uCamV;
+uniform vec3 uCamW;
+uniform float uFov;
+uniform float uCamDist;
+uniform vec3 uBhT1;
+uniform vec3 uBhN;
+uniform vec3 uBhT2;
+uniform vec2 uNdcScale;
+uniform float uPx;
+out vec4 vColor;
+
+float rnd(uint v) {
+  uint s = v * 747796405u + 2891336453u;
+  uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+  return float(((w >> 22u) ^ w) >> 8u) * (1.0 / 16777216.0);
+}
+
 void main() {
-  vec3 c = texture(uScene, vUv).rgb;
-  float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  float w = smoothstep(0.34, 0.90, luma);
-  fragColor = vec4(c * w, 1.0);
+  uint id = uint(gl_VertexID) * 5u;
+  float life = mix(45.0, 110.0, rnd(id));
+  float f = fract(uTime / life + rnd(id + 1u));
+
+  // u = r^1.5 shrinks linearly over the grain's life, which makes the
+  // accumulated Keplerian angle (omega = k / u) integrate to a logarithm.
+  float u0 = pow(uBhParams.y * mix(0.50, 1.10, rnd(id + 2u)), 1.5);
+  float u1 = pow(uBhParams.x, 1.5);
+  float u = mix(u0, u1, f);
+  float r = pow(u, 2.0 / 3.0);
+  float phi = rnd(id + 3u) * 6.2831853
+            + 0.9 * uBhParams.w * life / (u0 - u1) * log(u0 / u);
+
+  float hRnd = rnd(id + 4u);
+  float h = (hRnd - 0.5) * (0.10 + 0.07 * r);
+  vec3 radial = uBhT1 * cos(phi) + uBhT2 * sin(phi);
+  vec3 p = radial * r + uBhN * h;
+
+  vec3 dv = p - uCamPos;
+  float zc = dot(dv, uCamW);
+  vec2 a = vec2(dot(dv, uCamU), dot(dv, uCamV)) * (uFov / zc);
+  float bW = length(a) * (uCamDist / uFov);
+  float behind = clamp((zc - uCamDist) * 0.45, 0.0, 1.0);
+  // Matter level with the hole already looks magnified (apparent radius
+  // r / sqrt(1 - rs/r)); without this the grains would sit inside the
+  // raymarched disk's inner edge. It fades out for grains nearer the camera.
+  float lens = mix(inversesqrt(1.0 - 1.0 / r), 1.0, clamp((uCamDist - zc) / r, 0.0, 1.0));
+  if (behind > 0.01 && bW > 0.08) {
+    lens = max(lens, 0.5 * (bW + sqrt(bW * bW + 16.8 * behind)) / bW);
+  }
+  float behindFade = clamp((zc - (uCamDist + 0.1)) * 1.25, 0.0, 1.0);
+  // Wider than the CPU particles' mask: the point-mass model puts images of
+  // grains behind the hole on a ring inside the raymarched disk's far arc.
+  float shadowMask = smoothstep(2.7, 3.4, bW * lens);
+  float occ = 1.0 - behindFade * (1.0 - shadowMask);
+
+  // Relativistic beaming: the approaching side of the orbit is brighter.
+  vec3 vOrb = uBhT2 * cos(phi) - uBhT1 * sin(phi);
+  float beta = clamp(sqrt(0.5 / r), 0.08, 0.58);
+  float beam = 1.0 + beta * dot(vOrb, -normalize(dv));
+  beam *= beam * beam;
+
+  float heat = clamp(1.85 / max(1.05, r) - 0.14, 0.0, 1.0);
+  vec3 warm = vec3(0.96 + heat * 0.04, 0.44 + heat * 0.52, 0.14 + heat * heat * 0.84);
+  vec3 cyg = vec3(0.28 + heat * 0.72, 0.62 + heat * 0.36, 1.0);
+  float size = 0.9 + 2.3 * hRnd * hRnd * hRnd;
+  float px = size * uPx;
+  float fade = smoothstep(0.0, 0.06, f) * smoothstep(uBhParams.x, uBhParams.x + 0.9, r);
+  float twinkle = 0.70 + 0.30 * sin(uTime * (0.8 + 2.0 * hRnd) + float(gl_VertexID));
+  // Grains thinner than a pixel keep their energy by dimming instead.
+  float alpha = occ * fade * twinkle * beam * (0.10 + 0.34 * heat) * min(1.0, px * px);
+
+  gl_Position = vec4(a * lens * uNdcScale, 0.0, 1.0);
+  gl_PointSize = max(1.0, px * 2.4);
+  vColor = vec4(mix(warm, cyg, uCyg), alpha);
 }`,
 
-    BLUR_FS: `#version 300 es
+    // Dual-filter bloom (downsample chain, then additive tent upsample).
+    DOWN_FS: `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
 uniform sampler2D uTex;
-uniform vec2 uStep;
+uniform vec2 uHalfPixel;
+uniform float uFirst;     // 1 on the pass that reads the scene
+uniform float uSoftClip;
+
 void main() {
-  vec3 sum = texture(uTex, vUv).rgb * 0.227027;
-  sum += texture(uTex, vUv + uStep * 1.3846).rgb * 0.316216;
-  sum += texture(uTex, vUv - uStep * 1.3846).rgb * 0.316216;
-  sum += texture(uTex, vUv + uStep * 3.2307).rgb * 0.070270;
-  sum += texture(uTex, vUv - uStep * 3.2307).rgb * 0.070270;
-  fragColor = vec4(sum, 1.0);
+  vec3 c = texture(uTex, vUv).rgb * 4.0;
+  c += texture(uTex, vUv - uHalfPixel).rgb;
+  c += texture(uTex, vUv + uHalfPixel).rgb;
+  c += texture(uTex, vUv + vec2(uHalfPixel.x, -uHalfPixel.y)).rgb;
+  c += texture(uTex, vUv - vec2(uHalfPixel.x, -uHalfPixel.y)).rgb;
+  c *= 0.125;
+  if (uFirst > 0.5) {
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c /= max(0.2, 1.0 - l * uSoftClip);
+    l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    // Soft threshold, then a ceiling so a single hot grain cannot flash.
+    c = min(c * (max(0.0, l - 0.55) / max(l, 1e-4)), vec3(6.0));
+  }
+  fragColor = vec4(c, 1.0);
+}`,
+
+    UP_FS: `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+uniform sampler2D uTex;
+uniform vec2 uHalfPixel;
+
+void main() {
+  vec2 h = uHalfPixel;
+  vec3 c = texture(uTex, vUv + vec2(-h.x * 2.0, 0.0)).rgb;
+  c += texture(uTex, vUv + vec2(h.x * 2.0, 0.0)).rgb;
+  c += texture(uTex, vUv + vec2(0.0, h.y * 2.0)).rgb;
+  c += texture(uTex, vUv + vec2(0.0, -h.y * 2.0)).rgb;
+  c += texture(uTex, vUv + vec2(-h.x, h.y)).rgb * 2.0;
+  c += texture(uTex, vUv + vec2(h.x, h.y)).rgb * 2.0;
+  c += texture(uTex, vUv + vec2(h.x, -h.y)).rgb * 2.0;
+  c += texture(uTex, vUv + vec2(-h.x, -h.y)).rgb * 2.0;
+  fragColor = vec4(c / 12.0, 1.0);
 }`,
 
     COMP_FS: `#version 300 es
@@ -390,15 +519,25 @@ out vec4 fragColor;
 uniform sampler2D uScene;
 uniform sampler2D uBloom;
 uniform float uBloomStrength;
+uniform float uSoftClip;
 
 vec3 aces(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
 
+vec3 scene(vec2 uv) {
+  vec3 c = texture(uScene, uv).rgb;
+  return c / max(0.2, 1.0 - dot(c, vec3(0.2126, 0.7152, 0.0722)) * uSoftClip);
+}
+
 void main() {
-  vec3 col = texture(uScene, vUv).rgb + texture(uBloom, vUv).rgb * uBloomStrength;
   vec2 d = vUv - 0.5;
-  col *= 1.0 - dot(d, d) * 0.30;
+  float r2 = dot(d, d);
+  // Lens-like lateral chromatic aberration, zero at the centre.
+  vec2 ca = d * r2 * 0.005;
+  vec3 col = vec3(scene(vUv - ca).r, scene(vUv).g, scene(vUv + ca).b);
+  col += texture(uBloom, vUv).rgb * uBloomStrength;
+  col *= 1.0 - r2 * 0.30;
   col = pow(aces(col * 1.14), vec3(1.0 / 1.04));
   float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   col += (ign - 0.5) / 255.0;
@@ -440,34 +579,29 @@ function createProgram(gl, vsSrc, fsSrc) {
     return { program, u };
 }
 
-function createTexture(gl, w, h) {
+function createTarget(gl, w, h, hdr) {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    return tex;
-}
-
-function createFBO(gl, w, h) {
-    const tex = createTexture(gl, w, h);
+    if (hdr) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    } else {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
     const fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
     const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    if (!ok) return null;
+    if (!ok) {
+        gl.deleteFramebuffer(fbo);
+        gl.deleteTexture(tex);
+        return null;
+    }
     return { fbo, tex, w, h };
-}
-
-function resizeFBO(gl, target, w, h) {
-    if (!target || (target.w === w && target.h === h)) return;
-    target.w = w;
-    target.h = h;
-    gl.bindTexture(gl.TEXTURE_2D, target.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
 }
 
 export class WebGL2Renderer {
@@ -475,9 +609,9 @@ export class WebGL2Renderer {
         this.canvas = canvas;
         this.gl = null;
         this.ready = false;
-        this.sceneFBO = null;
-        this.bloomA = null;
-        this.bloomB = null;
+        this.hdr = false;
+        this.scene = null;
+        this.bloom = [];
         this.quadVao = null;
         this.lineVao = null;
         this.lineVbo = null;
@@ -486,8 +620,9 @@ export class WebGL2Renderer {
         this.bhProg = null;
         this.partProg = null;
         this.partHeadProg = null;
-        this.brightProg = null;
-        this.blurProg = null;
+        this.dustProg = null;
+        this.downProg = null;
+        this.upProg = null;
         this.compProg = null;
     }
 
@@ -499,7 +634,9 @@ export class WebGL2Renderer {
                 alpha: false,
                 depth: false,
                 stencil: false,
-                powerPreference: 'high-performance',
+                // A software rasteriser cannot run the raymarch; Canvas 2D
+                // serves those machines better.
+                failIfMajorPerformanceCaveat: true,
             });
         } catch (_) {
             return false;
@@ -512,28 +649,29 @@ export class WebGL2Renderer {
     rebuildResources(sim) {
         const gl = this.gl;
         if (!gl || gl.isContextLost()) return false;
+        this.ready = false;
 
         this.bhProg = createProgram(gl, SHADERS.FS_VS, SHADERS.BH_FS);
         this.partProg = createProgram(gl, SHADERS.PART_VS, SHADERS.PART_FS);
         this.partHeadProg = createProgram(gl, SHADERS.PART_HEAD_VS, SHADERS.PART_HEAD_FS);
-        this.brightProg = createProgram(gl, SHADERS.FS_VS, SHADERS.BRIGHT_FS);
-        this.blurProg = createProgram(gl, SHADERS.FS_VS, SHADERS.BLUR_FS);
+        this.dustProg = createProgram(gl, SHADERS.DUST_VS, SHADERS.PART_HEAD_FS);
+        this.downProg = createProgram(gl, SHADERS.FS_VS, SHADERS.DOWN_FS);
+        this.upProg = createProgram(gl, SHADERS.FS_VS, SHADERS.UP_FS);
         this.compProg = createProgram(gl, SHADERS.FS_VS, SHADERS.COMP_FS);
 
-        if (!this.bhProg || !this.partProg || !this.partHeadProg
-            || !this.brightProg || !this.blurProg || !this.compProg) {
+        if (!this.bhProg || !this.partProg || !this.partHeadProg || !this.dustProg
+            || !this.downProg || !this.upProg || !this.compProg) {
             return false;
         }
 
+        // Either extension makes RGBA16F renderable; without one the scene
+        // stays 8-bit with range compression (uSoftClip).
+        this.hdr = !!(gl.getExtension('EXT_color_buffer_float')
+            || gl.getExtension('EXT_color_buffer_half_float'));
+        this.scene = null;
+        this.bloom = [];
+
         this.quadVao = gl.createVertexArray();
-        const sw = Math.max(2, this.canvas.width || 2);
-        const sh = Math.max(2, this.canvas.height || 2);
-        const bw = Math.max(2, sw >> 2);
-        const bh = Math.max(2, sh >> 2);
-        this.sceneFBO = createFBO(gl, sw, sh);
-        this.bloomA = createFBO(gl, bw, bh);
-        this.bloomB = createFBO(gl, bw, bh);
-        if (!this.sceneFBO || !this.bloomA || !this.bloomB) return false;
 
         this.lineVao = gl.createVertexArray();
         this.lineVbo = gl.createBuffer();
@@ -562,21 +700,50 @@ export class WebGL2Renderer {
         return true;
     }
 
+    // (Re)allocates the scene target and its bloom mip chain for a scene size.
+    ensureTargets(sw, sh) {
+        const gl = this.gl;
+        if (this.scene && this.scene.w === sw && this.scene.h === sh) return true;
+        for (const t of [this.scene, ...this.bloom]) {
+            if (!t) continue;
+            gl.deleteFramebuffer(t.fbo);
+            gl.deleteTexture(t.tex);
+        }
+        this.bloom = [];
+        this.scene = createTarget(gl, sw, sh, this.hdr);
+        if (!this.scene && this.hdr) {
+            this.hdr = false;
+            this.scene = createTarget(gl, sw, sh, false);
+        }
+        if (!this.scene) return false;
+
+        let w = sw, h = sh;
+        for (let i = 0; i < config.BLOOM_LEVELS; i++) {
+            w >>= 1;
+            h >>= 1;
+            if (Math.min(w, h) < 4) break;
+            const t = createTarget(gl, w, h, this.hdr);
+            if (!t) break;
+            this.bloom.push(t);
+        }
+        return true;
+    }
+
     render(sim, view, quality) {
         const gl = this.gl;
         if (!this.ready || !gl || gl.isContextLost()) return;
 
         const cw = Math.max(2, this.canvas.width);
         const ch = Math.max(2, this.canvas.height);
-        const qW = Math.max(2, cw >> 2);
-        const qH = Math.max(2, ch >> 2);
-        resizeFBO(gl, this.sceneFBO, cw, ch);
-        resizeFBO(gl, this.bloomA, qW, qH);
-        resizeFBO(gl, this.bloomB, qW, qH);
+        const scale = quality.scale || 1;
+        const sw = Math.max(2, Math.round(cw * scale));
+        const sh = Math.max(2, Math.round(ch * scale));
+        if (!this.ensureTargets(sw, sh)) return;
+        const softClip = this.hdr ? 0 : 0.42;
 
-        // 1. Render relativistic black hole + outer-sky fast path into sceneFBO
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFBO.fbo);
-        gl.viewport(0, 0, cw, ch);
+        // 1. Relativistic black hole + outer-sky fast path into the scene target
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.scene.fbo);
+        gl.viewport(0, 0, sw, sh);
         gl.disable(gl.BLEND);
 
         const wM87 = sim.wM87, wGarg = sim.wGarg, wCyg = sim.wCyg;
@@ -588,7 +755,7 @@ export class WebGL2Renderer {
         const b = this.bhProg;
         const cam = sim.cam;
         gl.useProgram(b.program);
-        gl.uniform2f(b.u.uRes, cw, ch);
+        gl.uniform2f(b.u.uRes, sw, sh);
         gl.uniform1f(b.u.uTime, sim.time);
         gl.uniform3f(b.u.uWeights, wM87, wGarg, wCyg);
         gl.uniform4f(b.u.uBhParams, rIn, rOut, kerrSpin, omegaBase);
@@ -601,78 +768,115 @@ export class WebGL2Renderer {
             0.14 * wM87 + 0.16 * wGarg + 0.25 * wCyg,
             0.30 * wM87 + 0.34 * wGarg + 0.58 * wCyg);
         gl.uniform1f(b.u.uAbsorb, sim.absorbGlow);
-        gl.uniform3f(b.u.uCamPos, cam.ro[0], cam.ro[1], cam.ro[2]);
-        gl.uniform3f(b.u.uCamU, cam.uu[0], cam.uu[1], cam.uu[2]);
-        gl.uniform3f(b.u.uCamV, cam.vv[0], cam.vv[1], cam.vv[2]);
-        gl.uniform3f(b.u.uCamW, cam.ww[0], cam.ww[1], cam.ww[2]);
+        gl.uniform3fv(b.u.uCamPos, cam.ro);
+        gl.uniform3fv(b.u.uCamU, cam.uu);
+        gl.uniform3fv(b.u.uCamV, cam.vv);
+        gl.uniform3fv(b.u.uCamW, cam.ww);
         gl.uniform1f(b.u.uFov, cam.fov);
-        gl.uniform3f(b.u.uBhT1, sim.bhT1[0], sim.bhT1[1], sim.bhT1[2]);
-        gl.uniform3f(b.u.uBhN, sim.bhN[0], sim.bhN[1], sim.bhN[2]);
-        gl.uniform3f(b.u.uBhT2, sim.bhT2[0], sim.bhT2[1], sim.bhT2[2]);
+        gl.uniform3fv(b.u.uBhT1, sim.bhT1);
+        gl.uniform3fv(b.u.uBhN, sim.bhN);
+        gl.uniform3fv(b.u.uBhT2, sim.bhT2);
         gl.uniform1f(b.u.uMarchSteps, quality.marchSteps || config.BH_MARCH_STEPS);
+        gl.uniform1f(b.u.uSoftClip, softClip);
 
         gl.bindVertexArray(this.quadVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-        // Compacted active-only particle GPU upload & draw
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+        const px = (view.dpr || 1) * scale;
+
+        // 2. Stateless dust grains (attribute-less draw, all maths in the VS)
+        const dustCount = quality.dust | 0;
+        if (dustCount > 0) {
+            const d = this.dustProg;
+            const minDim = Math.min(sw, sh);
+            gl.useProgram(d.program);
+            gl.uniform1f(d.u.uTime, sim.time);
+            gl.uniform4f(d.u.uBhParams, rIn, rOut, kerrSpin, omegaBase);
+            gl.uniform1f(d.u.uCyg, wCyg);
+            gl.uniform3fv(d.u.uCamPos, cam.ro);
+            gl.uniform3fv(d.u.uCamU, cam.uu);
+            gl.uniform3fv(d.u.uCamV, cam.vv);
+            gl.uniform3fv(d.u.uCamW, cam.ww);
+            gl.uniform1f(d.u.uFov, cam.fov);
+            gl.uniform1f(d.u.uCamDist, cam.dist);
+            gl.uniform3fv(d.u.uBhT1, sim.bhT1);
+            gl.uniform3fv(d.u.uBhN, sim.bhN);
+            gl.uniform3fv(d.u.uBhT2, sim.bhT2);
+            gl.uniform2f(d.u.uNdcScale, (2 * minDim) / sw, (2 * minDim) / sh);
+            gl.uniform1f(d.u.uPx, px);
+            gl.drawArrays(gl.POINTS, 0, dustCount);
+        }
+
+        // 3. Compacted active-only CPU particles (cursor matter, infall)
         const drawCount = sim.drawCount;
         if (drawCount > 0) {
-            gl.enable(gl.BLEND);
-            gl.blendFunc(gl.ONE, gl.ONE);
-
             gl.useProgram(this.partProg.program);
             gl.bindVertexArray(this.lineVao);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.lineVbo);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, sim.pLineBuf, 0, drawCount * 12);
             gl.drawArrays(gl.LINES, 0, drawCount * 2);
 
-            const dpr = view.dpr || (this.canvas.clientWidth ? cw / this.canvas.clientWidth : 1);
             gl.useProgram(this.partHeadProg.program);
-            gl.uniform1f(this.partHeadProg.u.uDpr, dpr);
+            gl.uniform1f(this.partHeadProg.u.uDpr, px);
             gl.bindVertexArray(this.headVao);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.headVbo);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, sim.pHeadBuf, 0, drawCount * 7);
             gl.drawArrays(gl.POINTS, 0, drawCount);
         }
 
-        // 2. Quarter-res separable HDR Bloom (single 9-tap H+V Gaussian pass)
+        // 4. Bloom: downsample chain, then additive upsample back to level 0
         gl.disable(gl.BLEND);
         gl.bindVertexArray(this.quadVao);
-        if (quality.bloom) {
-            gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomA.fbo);
-            gl.viewport(0, 0, qW, qH);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, this.sceneFBO.tex);
-            gl.useProgram(this.brightProg.program);
-            gl.uniform1i(this.brightProg.u.uScene, 0);
-            gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.activeTexture(gl.TEXTURE0);
+        const levels = quality.bloom ? this.bloom.length : 0;
+        if (levels > 0) {
+            const down = this.downProg;
+            gl.useProgram(down.program);
+            gl.uniform1i(down.u.uTex, 0);
+            gl.uniform1f(down.u.uSoftClip, softClip);
+            let src = this.scene;
+            for (let i = 0; i < levels; i++) {
+                const dst = this.bloom[i];
+                gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+                gl.viewport(0, 0, dst.w, dst.h);
+                gl.bindTexture(gl.TEXTURE_2D, src.tex);
+                gl.uniform2f(down.u.uHalfPixel, 0.5 / src.w, 0.5 / src.h);
+                gl.uniform1f(down.u.uFirst, i === 0 ? 1 : 0);
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+                src = dst;
+            }
 
-            gl.useProgram(this.blurProg.program);
-            gl.uniform1i(this.blurProg.u.uTex, 0);
-
-            gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomB.fbo);
-            gl.bindTexture(gl.TEXTURE_2D, this.bloomA.tex);
-            gl.uniform2f(this.blurProg.u.uStep, 1.45 / qW, 0);
-            gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-            gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomA.fbo);
-            gl.bindTexture(gl.TEXTURE_2D, this.bloomB.tex);
-            gl.uniform2f(this.blurProg.u.uStep, 0, 1.45 / qH);
-            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            const up = this.upProg;
+            gl.useProgram(up.program);
+            gl.uniform1i(up.u.uTex, 0);
+            gl.enable(gl.BLEND);
+            for (let i = levels - 1; i > 0; i--) {
+                const dst = this.bloom[i - 1];
+                gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+                gl.viewport(0, 0, dst.w, dst.h);
+                gl.bindTexture(gl.TEXTURE_2D, this.bloom[i].tex);
+                gl.uniform2f(up.u.uHalfPixel, 0.5 / this.bloom[i].w, 0.5 / this.bloom[i].h);
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+            }
+            gl.disable(gl.BLEND);
         }
 
-        // 3. Final composite to screen (ACES + vignette + IGN dithering)
+        // 5. Composite to screen (upscale + aberration + ACES + vignette + dither)
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, cw, ch);
         gl.useProgram(this.compProg.program);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.sceneFBO.tex);
+        gl.bindTexture(gl.TEXTURE_2D, this.scene.tex);
         gl.uniform1i(this.compProg.u.uScene, 0);
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, this.bloomA.tex);
+        // With bloom off the sampler still needs a texture; strength 0 mutes it.
+        gl.bindTexture(gl.TEXTURE_2D, levels > 0 ? this.bloom[0].tex : this.scene.tex);
         gl.uniform1i(this.compProg.u.uBloom, 1);
-        gl.uniform1f(this.compProg.u.uBloomStrength, quality.bloom ? 0.56 : 0.0);
+        gl.uniform1f(this.compProg.u.uBloomStrength, levels > 0 ? config.BLOOM_STRENGTH / levels : 0);
+        gl.uniform1f(this.compProg.u.uSoftClip, softClip);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.activeTexture(gl.TEXTURE0);
         gl.bindVertexArray(null);
     }
 }
@@ -681,6 +885,24 @@ export class Canvas2DRenderer {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
+        this.stars = null;
+    }
+
+    // Static star layer, repainted only when the view size changes.
+    starLayer(w, h) {
+        if (this.stars && this.stars.width === w && this.stars.height === h) return this.stars;
+        const layer = document.createElement('canvas');
+        layer.width = w;
+        layer.height = h;
+        const ctx = layer.getContext('2d');
+        const count = Math.round((w * h) / 5200);
+        for (let i = 0; i < count; i++) {
+            const big = Math.random() > 0.9;
+            ctx.fillStyle = `rgba(${big ? '255,232,204' : '204,222,255'},${(0.2 + Math.random() * 0.6).toFixed(2)})`;
+            ctx.fillRect(Math.random() * w, Math.random() * h, big ? 1.6 : 1, big ? 1.6 : 1);
+        }
+        this.stars = layer;
+        return layer;
     }
 
     render(sim, view) {
@@ -690,28 +912,62 @@ export class Canvas2DRenderer {
 
         ctx.fillStyle = '#03050a';
         ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(this.starLayer(w, h), 0, 0);
 
         const cx = w * 0.5 + view.parallax.x * 10;
         const cy = h * 0.5 - view.parallax.y * 8;
-        const minDim = Math.min(w, h);
-        const rShadow = minDim * 0.19;
+        const unit = (sim.cam.fov / sim.cam.dist) * Math.min(w, h); // px per world unit
+        const rShadow = unit * 2.6;
 
         const rCol = Math.round(250 * (sim.wM87 + sim.wGarg) + 75 * sim.wCyg);
         const gCol = Math.round(140 * sim.wM87 + 195 * sim.wGarg + 210 * sim.wCyg);
         const bCol = Math.round(48 * sim.wM87 + 96 * sim.wGarg + 255 * sim.wCyg);
+        const tint = (a) => `rgba(${rCol},${gCol},${bCol},${a.toFixed(3)})`;
 
-        const halo = ctx.createRadialGradient(cx, cy, rShadow * 0.85, cx, cy, rShadow * 2.8);
-        halo.addColorStop(0, 'rgba(0, 0, 0, 1)');
-        halo.addColorStop(0.28, `rgba(${rCol}, ${gCol}, ${bCol}, ${(0.72 + sim.absorbGlow * 0.2).toFixed(2)})`);
-        halo.addColorStop(0.65, `rgba(${rCol}, ${gCol}, ${bCol}, 0.14)`);
-        halo.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        ctx.fillStyle = halo;
-        ctx.fillRect(0, 0, w, h);
+        // The disk is a circle in the plane with normal bhN: on screen an
+        // ellipse squashed along the projected normal by |n.z|.
+        const n = sim.bhN;
+        const squash = Math.max(0.1, Math.abs(n[2]));
+        const tiltAngle = Math.atan2(-n[1], n[0]);
+        const rOut = unit * 8.2;
+        const glow = 0.6 + Math.min(0.25, sim.absorbGlow * 0.2);
+        // Half the disk at a time: the far half goes behind the shadow, the
+        // near half in front of it.
+        const paintHalf = (near) => {
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(tiltAngle + ((n[2] > 0) === near ? Math.PI : 0));
+            ctx.beginPath();
+            ctx.rect(0, -rOut, rOut, rOut * 2);
+            ctx.clip();
+            ctx.scale(squash, 1);
+            const g = ctx.createRadialGradient(0, 0, unit * 1.9, 0, 0, rOut);
+            g.addColorStop(0, tint(0));
+            g.addColorStop(0.06, tint(glow));
+            g.addColorStop(0.3, tint(glow * 0.36));
+            g.addColorStop(1, tint(0));
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(0, 0, rOut, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        };
 
+        paintHalf(false);
         ctx.fillStyle = '#020307';
         ctx.beginPath();
         ctx.arc(cx, cy, rShadow, 0, Math.PI * 2);
         ctx.fill();
+        paintHalf(true);
+
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = tint(0.12 + sim.absorbGlow * 0.1);
+        ctx.beginPath();
+        ctx.arc(cx, cy, rShadow, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = tint(0.6);
+        ctx.stroke();
 
         const drawCount = sim.drawCount;
         if (drawCount <= 0) return;

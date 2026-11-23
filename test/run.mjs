@@ -5,6 +5,7 @@
 import { BlackHoleSimulation } from '../simulation.js';
 import { SHADERS } from '../renderer.js';
 import { config } from '../config.js';
+import { QualityGovernor } from '../quality.js';
 
 let failed = false;
 const check = (label, ok) => {
@@ -131,7 +132,7 @@ for (const [w, h] of [[1440, 900], [390, 844], [844, 390], [3840, 2160]]) {
 
 // --- 6. GLSL shader syntax & delimiter checks -------------------------------
 const shaderNames = Object.keys(SHADERS);
-check('renderer exports all 9 expected shaders', shaderNames.length === 9);
+check('renderer exports all 10 expected shaders', shaderNames.length === 10);
 for (const [name, src] of Object.entries(SHADERS)) {
     const hasVer = src.startsWith('#version 300 es');
     let braces = 0;
@@ -146,6 +147,53 @@ for (const [name, src] of Object.entries(SHADERS)) {
     }
     check(`shader ${name}: valid #version 300 es (byte 0) & balanced delimiters`,
         hasVer && balanced && braces === 0 && parens === 0);
+}
+
+// --- 7. Intro fly-in settles on the framed distance -------------------------
+{
+    const sim = new BlackHoleSimulation(1440, 900);
+    const settled = sim.cam.dist;
+    sim.ignite();
+    sim.update(0.016);
+    const pulledBack = sim.cam.dist;
+    for (let i = 0; i < 600; i++) sim.update(0.016);
+    check('ignite pulls the camera back, then eases it to the framed distance',
+        pulledBack > settled * 1.2 && Math.abs(sim.cam.dist - settled) < 0.01);
+}
+
+// --- 8. Adaptive quality governor -------------------------------------------
+{
+    const run = (gov, fps, seconds) => {
+        for (let i = 0; i < fps * seconds; i++) gov.sample(1 / fps, 60);
+    };
+
+    const slow = new QualityGovernor(false);
+    run(slow, 20, 30);
+    const s = slow.settings;
+    check('a slow device bottoms out at minimum scale with lite effects',
+        s.scale === config.SCALE_MIN && s.bloom === false && s.marchSteps === config.LITE.marchSteps);
+
+    const fast = new QualityGovernor(true);
+    run(fast, 60, 60);
+    check('a fast device climbs from the low-power start to full quality',
+        fast.scale === 1 && !fast.lite && fast.settings.dust === config.DUST_COUNT);
+
+    const hiccup = new QualityGovernor(false);
+    run(hiccup, 60, 5);
+    hiccup.sample(0.4, 60);
+    run(hiccup, 60, 5);
+    check('a single long frame does not cost quality', hiccup.scale === 1 && !hiccup.lite);
+
+    // A device that only holds 60 fps below scale 0.8: each failed probe
+    // upward must double the wait before the next one.
+    const edge = new QualityGovernor(false);
+    let changes = 0;
+    for (let i = 0; i < 60 * 240; i++) {
+        const fps = edge.scale > 0.8 ? 40 : 60;
+        if (edge.sample(1 / fps, 60)) changes++;
+    }
+    check(`a borderline device stops oscillating (${changes} level changes in 4 min, wait=${edge.probeAfter}s)`,
+        changes <= 12 && edge.probeAfter === config.QUALITY_PROBE_MAX_S && edge.scale <= 0.92);
 }
 
 console.log(failed ? '\nFAILED' : '\nALL OK');
