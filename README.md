@@ -18,7 +18,7 @@ A real-time general-relativistic Black Hole and particle absorption simulation r
   - accretion disk textured with two cross-fading flow-noise layers, so differential Keplerian rotation shears it into streaks without ever winding up, plus a thin volumetric gas glow and Doppler beaming;
   - `18,000` stateless GPU dust grains whose spiral-in orbits are closed-form in the vertex shader (no buffers, no CPU);
   - dual-filter mip-chain bloom, then a composite pass that upscales, adds slight chromatic aberration, ACES tone mapping, vignette and dithering.
-- `quality.js` — DOM-free `QualityGovernor`: trades render scale, then effects, for frame rate and probes back up with exponential backoff.
+- `quality.js` — DOM-free `QualityGovernor`: trades render scale, then effects, for frame rate and probes back up with exponential backoff, only while the visitor is interacting so the background never changes resolution under someone reading.
 - `script.js` — WebGL2 initialization, `webglcontextlost` fallback/recovery, `100lvh`-safe responsive sizing, pointer/hold particle streaming, device tilt parallax, link/button hover spacetime transitions, intro fly-in and idle camera drift, display-rate calibration with a ~60 fps cap, and `prefers-reduced-motion` handling.
 
 ## Look
@@ -42,7 +42,7 @@ One cinematic look: an edge-on disk with the lensed arc over the shadow, centred
 ## Graceful degradation & accessibility
 
 1. **WebGL2, full** — half-float HDR scene at up to `1.25` DPR, bloom, dust, 72 march steps. Weak or power-saving devices (few cores, little memory, coarse pointer, Save-Data) start at `0.7` render scale.
-2. **Adaptive render scale** — the governor lowers the scene resolution down to `0.5` when frame rate drops and raises it again when there is headroom; the composite pass upscales.
+2. **Adaptive render scale** — the governor lowers the scene resolution down to `0.5` when frame rate drops and raises it again when there is headroom and the visitor is active; the composite pass upscales. Shaders compile in parallel where `KHR_parallel_shader_compile` exists, and the canvas fades in with the first drawn frame.
 3. **Lite effects** — if minimum scale is still too slow: 44 march steps, no bloom, `5,000` dust grains, `500` particles.
 4. **8-bit targets** — without `EXT_color_buffer_float`/`half_float` the same pipeline runs range-compressed in RGBA8.
 5. **Canvas 2D** — when WebGL2 is unavailable, software-rendered, or its context is lost: painted disk, shadow, photon ring and the CPU particles.
@@ -57,4 +57,4 @@ The loop pauses in hidden tabs and renders at most ~60 fps on high-refresh displ
 npm test
 ```
 
-Headless Node checks for adaptive camera framing and sky-locked hover invariance, smooth `M87* -> Gargantua -> Cygnus X-1 -> M87*` transitions with orthonormal basis vectors, horizon oblivion absorption & redshift fade, 180-step finite soak stability, `< 0.5 ms/frame` CPU update budget, intro fly-in, quality governor behaviour (slow, fast, hiccup and borderline devices), and WebGL2 `#version 300 es` shader integrity.
+Headless Node checks for adaptive camera framing and sky-locked hover invariance, smooth `M87* -> Gargantua -> Cygnus X-1 -> M87*` transitions with orthonormal basis vectors, horizon oblivion absorption & redshift fade, 180-step finite soak stability, `< 0.5 ms/frame` CPU update budget, intro fly-in, quality governor behaviour (slow, fast, hiccup, borderline and idle), lowered particle capacity, and WebGL2 `#version 300 es` shader integrity.

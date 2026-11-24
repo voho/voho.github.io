@@ -25,13 +25,16 @@ export class QualityGovernor {
             scale: this.scale,
             marchSteps: lite ? lite.marchSteps : config.BH_MARCH_STEPS,
             bloom: lite ? lite.bloom : true,
-            dust: Math.round(config.DUST_COUNT * (lite ? lite.dustFraction : this.scale)),
+            // Not tied to scale: grains popping in and out on every scale
+            // step reads as a glitch.
+            dust: Math.round(config.DUST_COUNT * (lite ? lite.dustFraction : 1)),
             maxParticles: lite ? lite.maxParticles : config.MAX_PARTICLES,
         };
     }
 
     // Call once per rendered frame. Returns true when the level changed.
-    sample(dt, targetFps) {
+    // With mayRaise false the level can only drop.
+    sample(dt, targetFps, mayRaise = true) {
         if (this.grace > 0) {
             this.grace -= dt;
             return false;
@@ -56,6 +59,7 @@ export class QualityGovernor {
             this.goodTime = 0;
             return false;
         }
+        if (!mayRaise) return false;
         this.goodTime += config.QUALITY_SAMPLE_S;
         return this.goodTime >= this.probeAfter && this.stepUp();
     }

@@ -65,6 +65,7 @@ export class BlackHoleSimulation {
         this.pLineBuf = new Float32Array(maxP * 12);
         this.pHeadBuf = new Float32Array(maxP * 7);
         this.cursorIdx = 0;
+        this.capacity = maxP; // spawn slots in use; lowered by lite quality
 
         this.resize(width, height);
         this.updateBhBasis(0);
@@ -180,8 +181,8 @@ export class BlackHoleSimulation {
     }
 
     spawnParticle(x, y, z, biasVx, biasVy, biasVz, orbitalBoost = 0.64) {
-        const idx = this.cursorIdx;
-        this.cursorIdx = (this.cursorIdx + 1) % config.MAX_PARTICLES;
+        const idx = this.cursorIdx < this.capacity ? this.cursorIdx : 0;
+        this.cursorIdx = (idx + 1) % this.capacity;
 
         const r = Math.max(1.65, Math.sqrt(x * x + y * y + z * z));
         const dr = Math.max(0.32, r - 1.0);
@@ -281,6 +282,7 @@ export class BlackHoleSimulation {
     }
 
     stepParticles(dt, maxParticles = config.MAX_PARTICLES) {
+        this.capacity = Math.max(1, Math.min(config.MAX_PARTICLES, maxParticles | 0));
         const subDt = dt * 0.5;
         const capR = config.PARTICLE_CAPTURE_R;
         const maxAge = config.PARTICLE_MAX_AGE;
@@ -316,11 +318,12 @@ export class BlackHoleSimulation {
         const tdDamp = Math.exp(-dt * 2.4);
         const sink = 1 - dt * 0.48;
         const fadeDecay = Math.exp(-dt * 2.0);
-        const limit = Math.min(config.MAX_PARTICLES, maxParticles | 0);
         let alive = 0;
         let drawIdx = 0;
 
-        for (let i = 0; i < limit; i++) {
+        // Every slot is stepped: particles above a lowered capacity live out
+        // their age instead of vanishing or freezing until it rises again.
+        for (let i = 0; i < config.MAX_PARTICLES; i++) {
             const state = pState[i];
             if (state === 0) continue;
 

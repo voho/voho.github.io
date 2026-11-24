@@ -590,23 +590,24 @@ function compileShader(gl, type, src) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src.trimStart());
     gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        gl.deleteShader(s);
-        return null;
-    }
     return s;
 }
 
+// Compiles and links without asking for the result: the status queries block
+// until the driver is done, so they wait for finishProgram (see poll()).
 function createProgram(gl, vsSrc, fsSrc) {
     const vs = compileShader(gl, gl.VERTEX_SHADER, vsSrc);
     const fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSrc);
-    if (!vs || !fs) return null;
     const program = gl.createProgram();
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
     gl.deleteShader(vs);
     gl.deleteShader(fs);
+    return program;
+}
+
+function finishProgram(gl, program) {
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         gl.deleteProgram(program);
         return null;
@@ -650,6 +651,9 @@ export class WebGL2Renderer {
         this.canvas = canvas;
         this.gl = null;
         this.ready = false;
+        this.failed = false;
+        this.parallel = null;
+        this.pending = null;
         this.hdr = false;
         this.paletteWeights = [0, 0, 0];
         this.scene = null;
@@ -668,7 +672,7 @@ export class WebGL2Renderer {
         this.compProg = null;
     }
 
-    init(sim) {
+    init() {
         let gl = null;
         try {
             gl = this.canvas.getContext('webgl2', {
@@ -685,26 +689,46 @@ export class WebGL2Renderer {
         }
         if (!gl) return false;
         this.gl = gl;
-        return this.rebuildResources(sim);
+        return this.rebuildResources();
     }
 
-    rebuildResources(sim) {
+    // Starts compiling every program; poll() finishes the build.
+    rebuildResources() {
         const gl = this.gl;
         if (!gl || gl.isContextLost()) return false;
         this.ready = false;
+        this.failed = false;
+        this.parallel = gl.getExtension('KHR_parallel_shader_compile');
+        this.pending = {
+            bhProg: createProgram(gl, SHADERS.FS_VS, SHADERS.BH_FS),
+            partProg: createProgram(gl, SHADERS.PART_VS, SHADERS.PART_FS),
+            partHeadProg: createProgram(gl, SHADERS.PART_HEAD_VS, SHADERS.PART_HEAD_FS),
+            dustProg: createProgram(gl, SHADERS.DUST_VS, SHADERS.PART_HEAD_FS),
+            downProg: createProgram(gl, SHADERS.FS_VS, SHADERS.DOWN_FS),
+            upProg: createProgram(gl, SHADERS.FS_VS, SHADERS.UP_FS),
+            compProg: createProgram(gl, SHADERS.FS_VS, SHADERS.COMP_FS),
+        };
+        return true;
+    }
 
-        this.bhProg = createProgram(gl, SHADERS.FS_VS, SHADERS.BH_FS);
-        this.partProg = createProgram(gl, SHADERS.PART_VS, SHADERS.PART_FS);
-        this.partHeadProg = createProgram(gl, SHADERS.PART_HEAD_VS, SHADERS.PART_HEAD_FS);
-        this.dustProg = createProgram(gl, SHADERS.DUST_VS, SHADERS.PART_HEAD_FS);
-        this.downProg = createProgram(gl, SHADERS.FS_VS, SHADERS.DOWN_FS);
-        this.upProg = createProgram(gl, SHADERS.FS_VS, SHADERS.UP_FS);
-        this.compProg = createProgram(gl, SHADERS.FS_VS, SHADERS.COMP_FS);
-
-        if (!this.bhProg || !this.partProg || !this.partHeadProg || !this.dustProg
-            || !this.downProg || !this.upProg || !this.compProg) {
+    // Returns true once the renderer can draw. With KHR_parallel_shader_compile
+    // the driver compiles off the main thread and this stays false until it is
+    // done, instead of freezing the page on the first status query or draw.
+    poll(sim) {
+        if (this.ready) return true;
+        const gl = this.gl;
+        if (!this.pending || this.failed || !gl || gl.isContextLost()) return false;
+        const progs = Object.values(this.pending);
+        if (this.parallel && !progs.every(
+            (p) => gl.getProgramParameter(p, this.parallel.COMPLETION_STATUS_KHR))) {
             return false;
         }
+        for (const [name, program] of Object.entries(this.pending)) {
+            this[name] = finishProgram(gl, program);
+            if (!this[name]) this.failed = true;
+        }
+        this.pending = null;
+        if (this.failed) return false;
 
         // Either extension makes RGBA16F renderable; without one the scene
         // stays 8-bit with range compression (uSoftClip).
@@ -771,16 +795,17 @@ export class WebGL2Renderer {
         return true;
     }
 
+    // Returns whether a frame was drawn.
     render(sim, view, quality) {
         const gl = this.gl;
-        if (!this.ready || !gl || gl.isContextLost()) return;
+        if (!this.poll(sim)) return false;
 
         const cw = Math.max(2, this.canvas.width);
         const ch = Math.max(2, this.canvas.height);
         const scale = quality.scale || 1;
         const sw = Math.max(2, Math.round(cw * scale));
         const sh = Math.max(2, Math.round(ch * scale));
-        if (!this.ensureTargets(sw, sh)) return;
+        if (!this.ensureTargets(sw, sh)) return false;
         const softClip = this.hdr ? 0 : 0.42;
 
         // 1. Relativistic black hole + outer-sky fast path into the scene target
@@ -935,6 +960,7 @@ export class WebGL2Renderer {
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindVertexArray(null);
+        return true;
     }
 }
 

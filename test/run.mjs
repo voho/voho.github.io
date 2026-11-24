@@ -192,8 +192,27 @@ for (const [name, src] of Object.entries(SHADERS)) {
         const fps = edge.scale > 0.8 ? 40 : 60;
         if (edge.sample(1 / fps, 60)) changes++;
     }
+    const reading = new QualityGovernor(true);
+    for (let i = 0; i < 30 * 60; i++) reading.sample(1 / 30, 30, false);
+    check('quality never rises while the visitor is idle (reading)',
+        reading.scale === config.SCALE_START_LOW_POWER);
+    for (let i = 0; i < 30 * 60; i++) reading.sample(1 / 10, 30, false);
+    check('quality can still drop while idle', reading.scale < config.SCALE_START_LOW_POWER);
+
     check(`a borderline device stops oscillating (${changes} level changes in 4 min, wait=${edge.probeAfter}s)`,
         changes <= 12 && edge.probeAfter === config.QUALITY_PROBE_MAX_S && edge.scale <= 0.92);
+}
+
+// --- 9. Lowered particle capacity --------------------------------------------
+{
+    const sim = new BlackHoleSimulation(1440, 900);
+    sim.cursorIdx = 900;
+    sim.spawnParticle(4, 0, 0, 0, 0, 0);
+    const before = sim.px[900];
+    sim.update(0.016, { maxParticles: 500 });
+    check('particles above a lowered capacity keep moving', sim.px[900] !== before);
+    sim.spawnParticle(4, 0, 0, 0, 0, 0);
+    check('new particles spawn inside the lowered capacity', sim.cursorIdx < 500);
 }
 
 console.log(failed ? '\nFAILED' : '\nALL OK');
