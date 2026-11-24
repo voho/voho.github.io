@@ -64,13 +64,26 @@ function fitCanvases() {
     }
 }
 
+// Returns whether a WebGL frame was drawn, i.e. one the governor may time.
 function renderOnce() {
-    if (!sim) return;
-    if (useWebGL && glRenderer?.ready) {
-        glRenderer.render(sim, view, quality);
-    } else if (c2dRenderer) {
-        c2dRenderer.render(sim, view);
+    if (!sim) return false;
+    if (useWebGL) {
+        if (glRenderer.render(sim, view, quality)) {
+            onFirstFrame();
+            return true;
+        }
+        if (!glRenderer.failed) {
+            // Shaders still compiling. The animation loop retries every frame;
+            // without it (reduced motion) retry here.
+            if (rafId === null) requestAnimationFrame(renderOnce);
+            return false;
+        }
+        setBackend(false);
+        fitCanvases();
     }
+    c2dRenderer.render(sim, view);
+    onFirstFrame();
+    return false;
 }
 
 function rebuildSim() {
@@ -155,8 +168,9 @@ function frame(now) {
     camOffset.x = view.parallax.x + config.DRIFT_X * Math.sin(sim.time * 0.11);
     camOffset.y = view.parallax.y + config.DRIFT_Y * Math.sin(sim.time * 0.077 + 1.3);
     sim.update(dt, quality, camOffset);
-    renderOnce();
-    if (useWebGL && governor.sample(rawDt, fps)) quality = governor.settings;
+    // Raising quality is a visible change (sharper, more dust), so it waits
+    // for activity; while the visitor is reading it can only drop.
+    if (renderOnce() && governor.sample(rawDt, fps, !idle)) quality = governor.settings;
 }
 
 function startLoop() {
@@ -322,7 +336,7 @@ glCanvas.addEventListener('webglcontextlost', (ev) => {
 });
 
 glCanvas.addEventListener('webglcontextrestored', () => {
-    if (sim && glRenderer?.rebuildResources(sim)) {
+    if (sim && glRenderer?.rebuildResources()) {
         setBackend(true);
         fitCanvases();
         renderOnce();
@@ -345,11 +359,25 @@ function reveal() {
     revealed = true;
     root.classList.add('is-ready');
     if (!reducedMotion.matches) {
-        sim.ignite();
         hintTimer = setTimeout(dismissHint, config.HINT_TIMEOUT_MS);
     } else {
         root.classList.add('hint-done');
     }
+}
+
+// The canvas fades in and the intro fly-in starts with the first frame that
+// is actually drawn, so shader compilation never shows as a frozen or blank
+// background.
+let resolveFirstFrame;
+const firstFrame = new Promise((r) => { resolveFirstFrame = r; });
+let hasFrame = false;
+
+function onFirstFrame() {
+    if (hasFrame) return;
+    hasFrame = true;
+    root.classList.add('has-frame');
+    if (!reducedMotion.matches) sim.ignite();
+    resolveFirstFrame();
 }
 
 // Bootstrap
@@ -357,14 +385,15 @@ c2dRenderer = new Canvas2DRenderer(c2dCanvas);
 glRenderer = new WebGL2Renderer(glCanvas);
 fitCanvases();
 sim = new BlackHoleSimulation(view.w, view.h);
-const glReady = glRenderer.init(sim);
-setBackend(glReady);
+setBackend(glRenderer.init());
 fitCanvases();
 renderOnce();
 startLoop();
 
+// Content waits for the fonts and the first frame so both arrive together;
+// index.html reveals it anyway after a while if either never comes.
 const fontsReady = document.fonts ? document.fonts.ready : Promise.resolve();
-Promise.race([
-    fontsReady,
-    new Promise((r) => setTimeout(r, config.FONT_WAIT_MS)),
+Promise.all([
+    Promise.race([fontsReady, new Promise((r) => setTimeout(r, config.FONT_WAIT_MS))]),
+    firstFrame,
 ]).then(reveal);

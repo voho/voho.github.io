@@ -61,8 +61,8 @@ body {
     opacity: 0;
 }
 
-.js.is-ready #bg-gl,
-.js.is-ready #bg-2d {
+.js.has-frame #bg-gl,
+.js.has-frame #bg-2d {
     opacity: 1;
     transition: opacity 1.5s ease;
 }
